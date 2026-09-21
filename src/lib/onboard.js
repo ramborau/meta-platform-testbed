@@ -190,11 +190,19 @@ export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = f
       report.assets.instagram.push({ id: ig.id, username: ig.username, name: ig.name, pageId: info.id, pageName: info.name });
       igIds.delete(String(ig.id));
 
-      // Instagram messaging rides the Page subscription, but newer IG accounts
-      // also accept a direct subscription. Try it; a failure here is not fatal.
-      await wire(report, 'instagram', ig.id, ig.username || ig.id, () =>
-        graph.post(`${ig.id}/subscribed_apps`, { token: pageToken, form: { subscribed_fields: IG_FIELDS } })
-      , { optional: true });
+      // Instagram messaging is delivered through the Page subscription made
+      // just above, so Instagram is already live at this point. Accounts on
+      // the Instagram-Login API additionally accept a direct subscription;
+      // under Facebook Login this returns error #3 and that is expected, not
+      // a problem - hence optional, with a note rather than a failure.
+      await wire(
+        report,
+        'instagram',
+        ig.id,
+        ig.username || ig.id,
+        () => graph.post(`${ig.id}/subscribed_apps`, { token: pageToken, form: { subscribed_fields: IG_FIELDS } }),
+        { optional: true, note: 'Not required - Instagram webhooks arrive via the linked Page subscription.' }
+      );
     }
   }
 
@@ -275,10 +283,10 @@ export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = f
 
 // Run one wiring call and record the outcome instead of throwing. A single
 // failed subscription must not abandon the rest of the onboarding.
-async function wire(report, type, id, name, fn, { optional = false } = {}) {
+async function wire(report, type, id, name, fn, { optional = false, note } = {}) {
   try {
     const result = await fn();
-    report.wiring.push({ type, id, name, ok: true, optional, result });
+    report.wiring.push({ type, id, name, ok: true, optional, note, result });
     return true;
   } catch (err) {
     report.wiring.push({
@@ -287,9 +295,12 @@ async function wire(report, type, id, name, fn, { optional = false } = {}) {
       name,
       ok: false,
       optional,
+      // An optional call that fails is informational, so surface the note
+      // rather than an error that implies something needs fixing.
+      note,
       error: err.message,
       code: err.error?.code,
-      hint: subscribeHint(err.error),
+      hint: optional ? undefined : subscribeHint(err.error),
     });
     return false;
   }

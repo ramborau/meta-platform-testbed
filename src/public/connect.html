@@ -249,13 +249,21 @@ function renderReport(report) {
     for (const item of items) {
       const m = map(item);
       const w = wiringFor(m.id);
-      const state = w ? (w.ok ? 'wired' : 'unwired') : '';
-      const badge = w ? (w.ok ? '<span class="pill ok">subscribed</span>' : `<span class="pill err">${esc(w.error || 'failed')}</span>`) : '<span class="pill">no subscription</span>';
+      const state = w ? (w.ok || w.optional ? 'wired' : 'unwired') : '';
+      // An optional call that did not land is informational, not a failure:
+      // Instagram, for instance, is already live via its linked Page.
+      const badge = !w
+        ? '<span class="pill">no subscription</span>'
+        : w.ok
+          ? '<span class="pill ok">subscribed</span>'
+          : w.optional
+            ? '<span class="pill ok">live via Page</span>'
+            : `<span class="pill err">${esc(w.error || 'failed')}</span>`;
       const d = document.createElement('div');
       d.className = `asset ${state}`;
       d.innerHTML = `<div class="t"><span class="pill ${m.pill}">${esc(m.pill)}</span>${esc(m.title)}</div>
         <div class="s">${esc(m.sub)}</div><div style="margin-top:7px">${badge}</div>
-        ${w && !w.ok && w.hint ? `<div class="s" style="color:var(--amber);margin-top:5px">${esc(w.hint)}</div>` : ''}`;
+        ${w && !w.ok && (w.hint || w.note) ? `<div class="s" style="color:${w.optional ? 'var(--muted)' : 'var(--amber)'};margin-top:5px">${esc(w.hint || w.note)}</div>` : ''}`;
       grid.appendChild(d);
     }
     box.appendChild(grid);

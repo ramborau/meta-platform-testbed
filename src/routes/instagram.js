@@ -5,30 +5,57 @@ import { resolveToken, rawConnections } from '../lib/store.js';
 
 export const router = express.Router();
 
-// Instagram messaging goes through the linked Page/IG-user node. Sending uses
-// the same /messages edge as Messenger, addressed with the IGSID.
-const igId = (explicit) =>
-  explicit || config.instagram.id || rawConnections().instagram[0]?.id || rawConnections().pages[0]?.id || 'me';
+// Instagram has two API surfaces and they use different nodes:
+//
+//   Instagram API with Facebook Login  (what Embedded Signup gives us)
+//     profile / media   -> the IG user id        on graph.facebook.com
+//     conversations / messages / private replies -> the LINKED PAGE id,
+//                                                   with the PAGE token
+//
+//   Instagram API with Instagram Login (separate flow, graph.instagram.com)
+//     everything -> the IG user id
+//
+// Calling /messages or /conversations on the IG user id under Facebook Login
+// fails with "(#3) Application does not have the capability to make this API
+// call", which reads like a permissions problem but is really the wrong node.
 
-export async function sendInstagramText({ igUserId, to, text, token }) {
-  return graph.post(`${igId(igUserId)}/messages`, {
-    token: token || resolveToken('instagram'),
+// Profile and media reads: the Instagram account itself.
+const igProfileNode = (explicit) =>
+  explicit || config.instagram.id || rawConnections().instagram[0]?.id || 'me';
+
+// Messaging: the Facebook Page the Instagram account is linked to.
+const igMessagingNode = (explicit) => {
+  if (explicit) return explicit;
+  const ig = rawConnections().instagram[0];
+  return ig?.pageId || config.page.id || rawConnections().pages[0]?.id || 'me';
+};
+
+// Messaging always needs the Page token, not the user token.
+const igMessagingToken = (token) => {
+  if (token) return token;
+  const ig = rawConnections().instagram[0];
+  return ig?.access_token || resolveToken('instagram');
+};
+
+export async function sendInstagramText({ to, text, token, pageId }) {
+  return graph.post(`${igMessagingNode(pageId)}/messages`, {
+    token: igMessagingToken(token),
     body: { recipient: { id: to }, message: { text } },
   });
 }
 
 // A comment can be answered two ways: publicly on the thread, or as a DM to the
 // commenter (private reply). Private replies are allowed once per comment.
-export async function privateReplyToComment({ commentId, text, token }) {
-  return graph.post(`${igId()}/messages`, {
-    token: token || resolveToken('instagram'),
+export async function privateReplyToComment({ commentId, text, token, pageId }) {
+  return graph.post(`${igMessagingNode(pageId)}/messages`, {
+    token: igMessagingToken(token),
     body: { recipient: { comment_id: commentId }, message: { text } },
   });
 }
 
 export async function replyToComment({ commentId, text, token }) {
   return graph.post(`${commentId}/replies`, {
-    token: token || resolveToken('instagram'),
+    token: igMessagingToken(token),
     form: { message: text },
   });
 }
@@ -58,8 +85,8 @@ router.post('/send', async (req, res, next) => {
       };
     }
 
-    const result = await graph.post(`${igId()}/messages`, {
-      token: resolveToken('instagram'),
+    const result = await graph.post(`${igMessagingNode(req.body?.pageId)}/messages`, {
+      token: igMessagingToken(),
       body: { recipient: { id: to }, message },
     });
     res.json({ ok: true, result });
@@ -95,7 +122,7 @@ router.post('/private-reply', async (req, res, next) => {
 // GET /api/instagram/account - profile + follower counts
 router.get('/account', async (req, res, next) => {
   try {
-    const result = await graph.get(igId(req.query.igUserId), {
+    const result = await graph.get(igProfileNode(req.query.igUserId), {
       token: resolveToken('instagram'),
       query: { fields: 'id,username,name,profile_picture_url,followers_count,media_count,biography' },
     });
@@ -108,7 +135,7 @@ router.get('/account', async (req, res, next) => {
 // GET /api/instagram/media - recent posts, with comment counts
 router.get('/media', async (req, res, next) => {
   try {
-    const result = await graph.get(`${igId(req.query.igUserId)}/media`, {
+    const result = await graph.get(`${igProfileNode(req.query.igUserId)}/media`, {
       token: resolveToken('instagram'),
       query: {
         fields: 'id,caption,media_type,media_url,permalink,timestamp,like_count,comments_count',
@@ -124,8 +151,9 @@ router.get('/media', async (req, res, next) => {
 // GET /api/instagram/conversations
 router.get('/conversations', async (req, res, next) => {
   try {
-    const result = await graph.get(`${igId(req.query.igUserId)}/conversations`, {
-      token: resolveToken('instagram'),
+    // Conversations live on the Page node under Facebook Login, not the IG id.
+    const result = await graph.get(`${igMessagingNode(req.query.pageId)}/conversations`, {
+      token: igMessagingToken(),
       query: { platform: 'instagram', fields: 'participants,updated_time,message_count', limit: req.query.limit || 25 },
     });
     res.json(result);

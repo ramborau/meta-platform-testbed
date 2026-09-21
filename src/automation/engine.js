@@ -138,7 +138,9 @@ async function executeAction(rule, event) {
         });
       }
       if (event.channel === 'instagram') {
-        return sendInstagramText({ igUserId: event.recipientId || event.pageId, to: event.senderId, text: body });
+        // Deliberately not passing the webhook's recipient id: that is the
+        // Instagram account, but sends go through the linked Page node.
+        return sendInstagramText({ to: event.senderId, text: body });
       }
       if (event.channel === 'messenger') {
         return sendMessengerText({ to: event.senderId, text: body });
