@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -38,17 +39,73 @@ app.use(express.urlencoded({ extended: true }));
 // so gate everything except the webhook endpoints, OAuth callback and health.
 const OPEN_PREFIXES = ['/webhooks', '/webhook', '/auth', '/health', '/privacy', '/terms', '/favicon.ico'];
 
+// Derived from the password so the cookie never carries the password itself.
+const sessionCookie = () =>
+  crypto
+    .createHmac('sha256', process.env.SESSION_SECRET || config.dashboardPassword)
+    .update(`dashboard:${config.dashboardPassword}`)
+    .digest('hex');
+
 app.use((req, res, next) => {
   if (!config.requireAuth || !config.dashboardPassword) return next();
   if (OPEN_PREFIXES.some((p) => req.path === p || req.path.startsWith(`${p}/`))) return next();
 
+  const expected = sessionCookie();
+
+  // Already signed in on this browser.
+  const cookies = Object.fromEntries(
+    (req.headers.cookie || '')
+      .split(';')
+      .map((c) => c.trim().split('='))
+      .filter((p) => p.length === 2)
+  );
+  if (cookies.tb_session === expected) return next();
+
+  // One-click link: ?key=<password> signs in and drops the query string, so the
+  // password never lingers in the address bar or in a shared screenshot.
+  if (req.query.key && String(req.query.key) === config.dashboardPassword) {
+    res.cookie?.('tb_session', expected, {
+      httpOnly: true,
+      secure: req.protocol === 'https',
+      sameSite: 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+    if (!res.cookie) {
+      res.setHeader('Set-Cookie', `tb_session=${expected}; HttpOnly; Path=/; Max-Age=2592000; SameSite=Lax`);
+    }
+    const clean = req.path + (Object.keys(req.query).length > 1 ? '' : '');
+    return res.redirect(clean);
+  }
+
+  // Basic auth still works, for curl and for anyone who prefers it.
   const header = req.get('authorization') || '';
   if (header.startsWith('Basic ')) {
     const [, password] = Buffer.from(header.slice(6), 'base64').toString().split(':');
     if (password === config.dashboardPassword) return next();
   }
+
+  // A browser hitting this without credentials gets a sign-in page rather than
+  // the native popup, which people routinely mistake for a broken site.
+  if ((req.get('accept') || '').includes('text/html')) {
+    return res.status(401).type('html').send(signInPage());
+  }
   res.set('WWW-Authenticate', 'Basic realm="Meta Testbed"').sendStatus(401);
 });
+
+function signInPage() {
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in</title>
+<style>body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0a0e17;color:#e7ebf3;
+display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;padding:24px}
+.c{background:#111726;border:1px solid #222b42;border-radius:14px;padding:30px;max-width:390px;width:100%}
+h1{margin:0 0 6px;font-size:19px}p{color:#8892a8;font-size:13px;margin:0 0 18px}
+input{width:100%;background:#0a0e17;border:1px solid #222b42;border-radius:8px;color:#e7ebf3;padding:11px;font-size:14px;box-sizing:border-box}
+button{width:100%;margin-top:10px;background:#4d8dff;color:#fff;border:0;border-radius:8px;padding:11px;font-size:14px;font-weight:600;cursor:pointer}
+</style></head><body><div class="c">
+<h1>Meta Platform Testbed</h1><p>Enter the dashboard password.</p>
+<form method="GET"><input type="password" name="key" placeholder="Password" autofocus autocomplete="current-password">
+<button type="submit">Sign in</button></form></div></body></html>`;
+}
 
 // ---------------------------------------------------------------- routing ---
 app.get('/health', (req, res) =>
