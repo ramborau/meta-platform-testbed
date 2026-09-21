@@ -1,5 +1,5 @@
 import { config } from '../config.js';
-import { graph, exchangeEmbeddedSignupCode, debugToken } from './graph.js';
+import { graph, exchangeEmbeddedSignupCode, exchangeLongLivedToken, debugToken } from './graph.js';
 import { addEvent, setConnection, rawConnections, resetConnections } from './store.js';
 
 // The "connect everything at once" engine.
@@ -149,6 +149,43 @@ export async function onboardWithToken(
   const igIds = new Set(targetsFor('instagram_basic', 'instagram_manage_messages', 'instagram_manage_comments'));
 
   if (sessionInfo.waba_id) wabaIds.add(String(sessionInfo.waba_id));
+
+  // A User access token config has no asset picker - Meta says so in the
+  // dashboard - so there are no granular_scopes to read. Access is inherited
+  // from what the person can already see, which means me/accounts and
+  // me/adaccounts ARE the grant, not a superset of it.
+  if (!businessId) {
+    // A user token from the code exchange lasts about an hour. Trade it for a
+    // ~60 day one now, otherwise the connection dies before it is useful and
+    // every later call fails with an expired-token error.
+    const long = await exchangeLongLivedToken(token).catch(() => null);
+    if (long?.access_token) {
+      token = long.access_token;
+      expiresIn = long.expires_in ?? expiresIn;
+      report.expiresIn = expiresIn;
+      step('Exchanged for a long-lived user token', true, { expiresIn });
+    } else {
+      report.warnings.push('Could not exchange for a long-lived token; this user token expires in about an hour.');
+    }
+
+    const [pages, adAccounts] = await Promise.all([
+      graph.get('me/accounts', { token, query: { fields: 'id,name', limit: 100 } }).catch(() => null),
+      graph.get('me/adaccounts', { token, query: { fields: 'account_id,name', limit: 100 } }).catch(() => null),
+    ]);
+    for (const p of pages?.data || []) pageIds.add(String(p.id));
+    for (const a of adAccounts?.data || []) adAccountIds.add(String(a.account_id || a.id).replace(/^act_/, ''));
+
+    step('Enumerated assets from the user token', true, {
+      pages: pages?.data?.length || 0,
+      adAccounts: adAccounts?.data?.length || 0,
+    });
+    report.tokenKind = 'user';
+    report.warnings.push(
+      'User access token: Meta does not offer asset selection for this configuration type, so everything this account can reach was granted. Switch the configuration to System-user access token if you need to pick assets.'
+    );
+  } else {
+    report.tokenKind = 'business_system_user';
+  }
 
   // granular_scopes is what the customer actually ticked in the dialog. The
   // business owned_*/client_* edges list everything the business owns, which is
