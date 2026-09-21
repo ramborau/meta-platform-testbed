@@ -1,7 +1,7 @@
 import express from 'express';
 import { config } from '../config.js';
 import { graph } from '../lib/graph.js';
-import { resolveToken, rawConnections } from '../lib/store.js';
+import { resolveToken, rawConnections, addEvent } from '../lib/store.js';
 
 export const router = express.Router();
 
@@ -114,6 +114,109 @@ router.post('/private-reply', async (req, res, next) => {
     if (!commentId || !text) return res.status(400).json({ error: 'commentId and text are required' });
     const result = await privateReplyToComment({ commentId, text });
     res.json({ ok: true, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/instagram/publish - publish a post to the Instagram account.
+//
+// Publishing is two steps and the gap between them matters: creating a media
+// container starts an async upload, and publishing before it finishes fails.
+// So this polls status_code until the container is FINISHED.
+router.post('/publish', async (req, res, next) => {
+  try {
+    const { imageUrl, caption, videoUrl, mediaType, carousel } = req.body || {};
+    const igUser = igProfileNode(req.body?.igUserId);
+    const token = igMessagingToken();
+    const steps = [];
+
+    if (!imageUrl && !videoUrl && !carousel) {
+      return res.status(400).json({ error: 'imageUrl, videoUrl or carousel is required' });
+    }
+
+    // ------------------------------------------------ 1. build container ----
+    let creationId;
+
+    if (Array.isArray(carousel) && carousel.length >= 2) {
+      // Each carousel child is its own container, flagged is_carousel_item,
+      // then a parent container ties them together.
+      const children = [];
+      for (const url of carousel.slice(0, 10)) {
+        const child = await graph.post(`${igUser}/media`, {
+          token,
+          body: { image_url: url, is_carousel_item: true },
+        });
+        children.push(child.id);
+      }
+      steps.push({ step: 'carousel children created', ids: children });
+
+      const parent = await graph.post(`${igUser}/media`, {
+        token,
+        body: { media_type: 'CAROUSEL', children: children.join(','), caption: caption || '' },
+      });
+      creationId = parent.id;
+    } else if (videoUrl) {
+      const container = await graph.post(`${igUser}/media`, {
+        token,
+        body: { media_type: mediaType || 'REELS', video_url: videoUrl, caption: caption || '' },
+      });
+      creationId = container.id;
+    } else {
+      const container = await graph.post(`${igUser}/media`, {
+        token,
+        body: { image_url: imageUrl, caption: caption || '' },
+      });
+      creationId = container.id;
+    }
+    steps.push({ step: 'container created', creationId });
+
+    // ------------------------------------------------- 2. wait for upload ---
+    let status = 'IN_PROGRESS';
+    for (let i = 0; i < 20 && status === 'IN_PROGRESS'; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const s = await graph
+        .get(creationId, { token, query: { fields: 'status_code,status' } })
+        .catch(() => ({ status_code: 'IN_PROGRESS' }));
+      status = s.status_code || 'IN_PROGRESS';
+      if (status === 'ERROR') {
+        return res.status(502).json({ error: 'Media container failed to process', detail: s.status, steps });
+      }
+    }
+    steps.push({ step: 'container status', status });
+    if (status !== 'FINISHED') {
+      return res.status(504).json({ error: `Container still ${status} after 40s`, creationId, steps });
+    }
+
+    // ----------------------------------------------------------- 3. publish -
+    const published = await graph.post(`${igUser}/media_publish`, { token, body: { creation_id: creationId } });
+    steps.push({ step: 'published', mediaId: published.id });
+
+    const media = await graph
+      .get(published.id, { token, query: { fields: 'id,permalink,media_type,caption,timestamp' } })
+      .catch(() => null);
+
+    addEvent({
+      channel: 'instagram',
+      kind: 'post.published',
+      summary: `Published to Instagram: ${media?.permalink || published.id}`,
+      payload: { mediaId: published.id, permalink: media?.permalink },
+    });
+
+    res.json({ ok: true, mediaId: published.id, permalink: media?.permalink, media, steps });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instagram/publish-limit - how many posts remain in the 24h quota
+router.get('/publish-limit', async (req, res, next) => {
+  try {
+    const result = await graph.get(`${igProfileNode(req.query.igUserId)}/content_publishing_limit`, {
+      token: igMessagingToken(),
+      query: { fields: 'config,quota_usage' },
+    });
+    res.json(result);
   } catch (err) {
     next(err);
   }

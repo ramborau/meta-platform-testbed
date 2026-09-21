@@ -130,6 +130,86 @@ router.post('/profile', async (req, res, next) => {
   }
 });
 
+// POST /api/messenger/post - publish an organic post to the Facebook Page.
+// Text, link and photo posts use different edges, so the shape of the request
+// decides which one is used.
+router.post('/post', async (req, res, next) => {
+  try {
+    const { message, link, imageUrl, published = true, scheduledAt } = req.body || {};
+    const id = req.body?.pageId || pageId();
+    const token = resolveToken('messenger');
+
+    if (!message && !link && !imageUrl) {
+      return res.status(400).json({ error: 'message, link or imageUrl is required' });
+    }
+
+    // Scheduling requires published=false plus a unix timestamp at least
+    // 10 minutes out, which Meta enforces.
+    const scheduling = scheduledAt
+      ? { published: false, scheduled_publish_time: Math.floor(new Date(scheduledAt).getTime() / 1000) }
+      : { published };
+
+    let result;
+    let edge;
+    if (imageUrl) {
+      edge = 'photos';
+      result = await graph.post(`${id}/photos`, {
+        token,
+        body: { url: imageUrl, caption: message || '', ...scheduling },
+      });
+    } else {
+      edge = 'feed';
+      result = await graph.post(`${id}/feed`, {
+        token,
+        body: { message: message || '', ...(link ? { link } : {}), ...scheduling },
+      });
+    }
+
+    const postId = result.post_id || result.id;
+    const detail = await graph
+      .get(postId, { token, query: { fields: 'id,permalink_url,created_time,message' } })
+      .catch(() => null);
+
+    addEvent({
+      channel: 'messenger',
+      kind: 'post.published',
+      summary: `Posted to Page via /${edge}: ${detail?.permalink_url || postId}`,
+      payload: { postId, permalink: detail?.permalink_url },
+    });
+
+    res.json({ ok: true, edge, postId, permalink: detail?.permalink_url, result, detail });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/messenger/posts - recent Page posts with engagement counts
+router.get('/posts', async (req, res, next) => {
+  try {
+    const id = req.query.pageId || pageId();
+    const result = await graph.get(`${id}/posts`, {
+      token: resolveToken('messenger'),
+      query: {
+        fields: 'id,message,created_time,permalink_url,is_published,likes.summary(true),comments.summary(true),shares',
+        limit: req.query.limit || 10,
+      },
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/messenger/post/:postId - clean up a test post
+router.delete('/post/:postId', async (req, res, next) => {
+  try {
+    const result = await graph.del(req.params.postId, { token: resolveToken('messenger') });
+    res.json({ ok: true, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/messenger/conversations
 router.get('/conversations', async (req, res, next) => {
   try {

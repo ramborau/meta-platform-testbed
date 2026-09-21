@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import express from 'express';
 import { config } from '../config.js';
 import { graph } from '../lib/graph.js';
@@ -394,6 +395,206 @@ router.post('/subscribe', async (req, res, next) => {
       form: { app_id: config.appId },
     });
     res.json({ ok: true, adAccount: id, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ------------------------------------------------------------ audiences ----
+// None of this needs a payment method, so it works on any active account.
+
+// GET /api/ads/audiences
+router.get('/audiences', async (req, res, next) => {
+  try {
+    const id = acct(req.query.accountId);
+    if (!id) return res.status(400).json({ error: 'No ad account available' });
+    const result = await graph.get(`${id}/customaudiences`, {
+      token: resolveToken('ads'),
+      query: {
+        fields:
+          'id,name,description,subtype,approximate_count_lower_bound,approximate_count_upper_bound,delivery_status,operation_status,time_created',
+        limit: req.query.limit || 50,
+      },
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/ads/audiences
+//   CUSTOM     - a customer list you upload hashed records into
+//   ENGAGEMENT - people who engaged with a Page or Instagram account
+//   WEBSITE    - pixel traffic
+router.post('/audiences', async (req, res, next) => {
+  try {
+    const id = acct(req.body?.accountId);
+    if (!id) return res.status(400).json({ error: 'No ad account available' });
+    const { name, description, subtype = 'CUSTOM', retentionDays = 365, pixelId, objectId, eventName } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const body = { name, description: description || 'Created by the Meta testbed', subtype };
+
+    if (subtype === 'CUSTOM') {
+      // Meta requires the provenance of uploaded records to be declared.
+      body.customer_file_source = req.body?.customerFileSource || 'USER_PROVIDED_ONLY';
+    } else if (subtype === 'ENGAGEMENT') {
+      const source = objectId || rawConnections().pages[0]?.id;
+      if (!source) return res.status(400).json({ error: 'objectId (Page or IG id) is required for ENGAGEMENT' });
+      body.rule = JSON.stringify({
+        inclusions: {
+          operator: 'or',
+          rules: [
+            {
+              event_sources: [{ type: 'page', id: String(source) }],
+              retention_seconds: retentionDays * 86400,
+              filter: {
+                operator: 'and',
+                filters: [{ field: 'event', operator: '=', value: eventName || 'page_engaged' }],
+              },
+            },
+          ],
+        },
+      });
+    } else if (subtype === 'WEBSITE') {
+      if (!pixelId) return res.status(400).json({ error: 'pixelId is required for WEBSITE' });
+      body.rule = JSON.stringify({
+        inclusions: {
+          operator: 'or',
+          rules: [{ event_sources: [{ type: 'pixel', id: String(pixelId) }], retention_seconds: retentionDays * 86400 }],
+        },
+      });
+    }
+
+    const result = await graph.post(`${id}/customaudiences`, { token: resolveToken('ads'), body });
+    addEvent({
+      channel: 'ads',
+      kind: 'audience.created',
+      summary: `Created ${subtype} custom audience "${name}" (${result.id})`,
+      payload: { id: result.id, subtype },
+    });
+    res.json({ ok: true, audienceId: result.id, subtype, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/ads/audiences/:id/users
+// Records are SHA-256 hashed here, so raw emails and phone numbers never leave
+// this server.
+router.post('/audiences/:id/users', async (req, res, next) => {
+  try {
+    const { emails = [], phones = [] } = req.body || {};
+    if (!emails.length && !phones.length) return res.status(400).json({ error: 'emails or phones required' });
+
+    const shaEmail = (v) => createHash('sha256').update(String(v).trim().toLowerCase()).digest('hex');
+    const shaPhone = (v) => createHash('sha256').update(String(v).replace(/[^0-9]/g, '')).digest('hex');
+
+    let schema;
+    const data = [];
+    if (emails.length && phones.length) {
+      schema = ['EMAIL', 'PHONE'];
+      const n = Math.max(emails.length, phones.length);
+      for (let i = 0; i < n; i++) data.push([emails[i] ? shaEmail(emails[i]) : '', phones[i] ? shaPhone(phones[i]) : '']);
+    } else if (emails.length) {
+      schema = ['EMAIL'];
+      for (const e of emails) data.push([shaEmail(e)]);
+    } else {
+      schema = ['PHONE'];
+      for (const p of phones) data.push([shaPhone(p)]);
+    }
+
+    const result = await graph.post(`${req.params.id}/users`, {
+      token: resolveToken('ads'),
+      body: { payload: { schema, data } },
+    });
+    res.json({ ok: true, added: data.length, hashing: 'sha256', schema, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/ads/lookalike
+router.post('/lookalike', async (req, res, next) => {
+  try {
+    const id = acct(req.body?.accountId);
+    const { sourceAudienceId, name, country = 'IN', ratio = 0.01 } = req.body || {};
+    if (!sourceAudienceId) return res.status(400).json({ error: 'sourceAudienceId is required' });
+
+    const result = await graph.post(`${id}/customaudiences`, {
+      token: resolveToken('ads'),
+      body: {
+        name: name || `[Testbed] Lookalike ${ratio * 100}% ${country}`,
+        subtype: 'LOOKALIKE',
+        origin_audience_id: sourceAudienceId,
+        lookalike_spec: JSON.stringify({ type: 'custom_ratio', ratio, country }),
+      },
+    });
+    res.json({ ok: true, audienceId: result.id, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/ads/adset - an ad set targeting custom audiences, PAUSED.
+router.post('/adset', async (req, res, next) => {
+  try {
+    const id = acct(req.body?.accountId);
+    const {
+      campaignId,
+      name,
+      includeAudiences = [],
+      excludeAudiences = [],
+      countries = ['IN'],
+      dailyBudget = 20000,
+      optimizationGoal = 'LINK_CLICKS',
+      billingEvent = 'IMPRESSIONS',
+    } = req.body || {};
+    if (!campaignId) return res.status(400).json({ error: 'campaignId is required' });
+
+    const targeting = {
+      geo_locations: { countries },
+      age_min: 18,
+      age_max: 65,
+      ...(includeAudiences.length ? { custom_audiences: includeAudiences.map((a) => ({ id: String(a) })) } : {}),
+      ...(excludeAudiences.length
+        ? { excluded_custom_audiences: excludeAudiences.map((a) => ({ id: String(a) })) }
+        : {}),
+    };
+
+    const result = await graph.post(`${id}/adsets`, {
+      token: resolveToken('ads'),
+      body: {
+        name: name || '[Testbed] Ad set with custom audience',
+        campaign_id: campaignId,
+        status: 'PAUSED',
+        daily_budget: String(dailyBudget),
+        billing_event: billingEvent,
+        optimization_goal: optimizationGoal,
+        bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+        targeting,
+        start_time: new Date(Date.now() + 7 * 864e5).toISOString(),
+      },
+    });
+    res.json({ ok: true, adsetId: result.id, targeting, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/ads/reach - estimated audience size for a targeting spec
+router.get('/reach', async (req, res, next) => {
+  try {
+    const id = acct(req.query.accountId);
+    const targeting = {
+      geo_locations: { countries: String(req.query.countries || 'IN').split(',') },
+      ...(req.query.audienceId ? { custom_audiences: [{ id: req.query.audienceId }] } : {}),
+    };
+    const result = await graph.get(`${id}/delivery_estimate`, {
+      token: resolveToken('ads'),
+      query: { optimization_goal: req.query.optimizationGoal || 'LINK_CLICKS', targeting_spec: targeting },
+    });
+    res.json({ targeting, result });
   } catch (err) {
     next(err);
   }
