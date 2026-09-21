@@ -3,7 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { config } from './config.js';
-import { seedRules, addEvent, eventStats } from './lib/store.js';
+import { seedRules, addEvent, eventStats, restoreConnections, restoreRules } from './lib/store.js';
+import { initPersistence, persistenceStatus } from './lib/persist.js';
 import { GraphError } from './lib/graph.js';
 
 import { router as webhooksRouter } from './routes/webhooks.js';
@@ -115,6 +116,7 @@ app.get('/health', (req, res) =>
     uptimeSeconds: Math.round(process.uptime()),
     publicUrl: config.publicUrl,
     events: eventStats(),
+    persistence: persistenceStatus(),
   })
 );
 
@@ -222,6 +224,15 @@ function graphHint(fbError) {
 
 // ------------------------------------------------------------------ boot ----
 seedRules();
+
+// Restore onboarding state before accepting traffic, so the first webhook after
+// a redeploy already has the tokens it needs to reply.
+const persisted = await initPersistence();
+if (persisted) {
+  const restored = await restoreConnections();
+  const ruleCount = await restoreRules();
+  if (restored) console.log(`  Restored: ${JSON.stringify(restored)}${ruleCount ? `, ${ruleCount} rules` : ''}`);
+}
 
 app.listen(config.port, () => {
   console.log(`\n  Meta testbed listening on :${config.port}`);

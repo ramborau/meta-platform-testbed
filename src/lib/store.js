@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import { saveState, loadState } from './persist.js';
 
 // In-memory state. This is a testbed, not a system of record: events live in a
 // bounded ring buffer and reset when the instance restarts. Swap this module for
@@ -70,7 +71,32 @@ const connections = {
 export function setConnection(key, value) {
   connections[key] = value;
   addEvent({ channel: 'system', kind: 'connection.updated', summary: `${key} updated`, payload: { key } });
+  // Fire and forget: a storage hiccup must not break onboarding.
+  saveState('connections', connections).catch(() => {});
   return connections[key];
+}
+
+// Restore tokens and asset IDs captured by a previous instance, so a redeploy
+// does not force the customer back through Embedded Signup.
+export async function restoreConnections() {
+  const saved = await loadState('connections');
+  if (!saved) return null;
+  for (const key of Object.keys(connections)) {
+    if (saved[key] !== undefined) connections[key] = saved[key];
+  }
+  const counts = {
+    whatsapp: connections.whatsapp.length,
+    pages: connections.pages.length,
+    instagram: connections.instagram.length,
+    adAccounts: connections.adAccounts.length,
+  };
+  addEvent({
+    channel: 'system',
+    kind: 'connections.restored',
+    summary: `Restored connections: ${counts.whatsapp} WABA · ${counts.pages} Pages · ${counts.instagram} IG · ${counts.adAccounts} ad accounts`,
+    payload: counts,
+  });
+  return counts;
 }
 
 export function getConnections() {
@@ -162,6 +188,16 @@ export function listRules() {
   return rules;
 }
 
+export async function restoreRules() {
+  const saved = await loadState('rules');
+  if (!Array.isArray(saved) || !saved.length) return null;
+  rules.length = 0;
+  rules.push(...saved);
+  return rules.length;
+}
+
+const persistRules = () => saveState('rules', rules).catch(() => {});
+
 export function addRule(rule) {
   const record = {
     id: id(),
@@ -181,6 +217,7 @@ export function addRule(rule) {
     enabled: rule.enabled !== false,
   };
   rules.push(record);
+  persistRules();
   return record;
 }
 
@@ -188,6 +225,7 @@ export function updateRule(ruleId, patch) {
   const rule = rules.find((r) => r.id === ruleId);
   if (!rule) return null;
   Object.assign(rule, patch, { id: rule.id, createdAt: rule.createdAt });
+  persistRules();
   return rule;
 }
 
@@ -195,5 +233,6 @@ export function deleteRule(ruleId) {
   const i = rules.findIndex((r) => r.id === ruleId);
   if (i === -1) return false;
   rules.splice(i, 1);
+  persistRules();
   return true;
 }

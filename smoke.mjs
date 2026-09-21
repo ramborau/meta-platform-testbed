@@ -29,6 +29,7 @@ let r = await fetch(B + '/health');
 let j = await r.json();
 ok('GET /health returns 200', r.status === 200);
 ok('health.ok is true', j.ok === true);
+ok('health reports persistence status', typeof j.persistence?.configured === 'boolean', JSON.stringify(j.persistence));
 j = await (await fetch(B + '/api/config')).json();
 ok('config exposes the verify token', j.verifyToken === VT);
 ok('config lists every setup URL', Object.keys(j.urls).length >= 10);

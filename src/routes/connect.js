@@ -2,11 +2,14 @@ import express from 'express';
 import { config } from '../config.js';
 import { onboardFromCode, rewireExisting, PAGE_FIELDS, IG_FIELDS } from '../lib/onboard.js';
 import { addEvent, getConnections } from '../lib/store.js';
+import { saveState, loadState } from '../lib/persist.js';
 
 export const router = express.Router();
 
-// The last onboarding report, so the console can show it after a page reload.
+// The last onboarding report, so the console can show it after a page reload
+// or a redeploy.
 let lastReport = null;
+loadState('lastReport').then((r) => { if (r && !lastReport) lastReport = r; }).catch(() => {});
 
 // POST /api/connect/exchange
 // One authorization code from Embedded Signup v4 in, a fully wired integration out.
@@ -17,6 +20,7 @@ router.post('/exchange', async (req, res, next) => {
 
     const report = await onboardFromCode(code, { sessionInfo: sessionInfo || {}, autoRegister, registerPin });
     lastReport = report;
+    saveState('lastReport', report).catch(() => {});
     res.json(report);
   } catch (err) {
     addEvent({
