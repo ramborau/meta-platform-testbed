@@ -77,6 +77,81 @@ router.post('/send', async (req, res, next) => {
         };
         break;
 
+      // A list supports up to 10 rows across sections, so it is the way to
+      // offer more than the 3 options a button message allows.
+      case 'list':
+        payload = {
+          messaging_product: 'whatsapp',
+          to,
+          type: 'interactive',
+          interactive: {
+            type: 'list',
+            ...(header ? { header: { type: 'text', text: header } } : {}),
+            body: { text: text || 'Choose from the list' },
+            footer: { text: req.body?.footer || 'Meta testbed' },
+            action: {
+              button: req.body?.buttonText || 'View options',
+              sections: req.body?.sections || [
+                {
+                  title: 'Options',
+                  rows: (buttons || ['Pricing', 'Book a demo', 'Talk to a human']).slice(0, 10).map((b, i) => ({
+                    id: typeof b === 'string' ? `row_${i}` : b.id,
+                    title: typeof b === 'string' ? b : b.title,
+                    description: typeof b === 'string' ? '' : b.description || '',
+                  })),
+                },
+              ],
+            },
+          },
+        };
+        break;
+
+      // A CTA URL button renders a real link button instead of pasting a raw
+      // URL into the body, and does not count against the 3-button limit.
+      case 'cta_url':
+        payload = {
+          messaging_product: 'whatsapp',
+          to,
+          type: 'interactive',
+          interactive: {
+            type: 'cta_url',
+            ...(header ? { header: { type: 'text', text: header } } : {}),
+            body: { text: text || 'Open the link below' },
+            action: {
+              name: 'cta_url',
+              parameters: {
+                display_text: req.body?.buttonText || 'Open',
+                url: req.body?.url || 'https://meta-platform-testbed.onrender.com/',
+              },
+            },
+          },
+        };
+        break;
+
+      case 'location':
+        payload = {
+          messaging_product: 'whatsapp',
+          to,
+          type: 'location',
+          location: {
+            latitude: req.body?.latitude ?? 18.5204,
+            longitude: req.body?.longitude ?? 73.8567,
+            name: req.body?.locationName || 'Pune',
+            address: req.body?.address || 'Maharashtra, India',
+          },
+        };
+        break;
+
+      case 'reaction':
+        if (!req.body?.messageId) return res.status(400).json({ error: 'messageId is required to react' });
+        payload = {
+          messaging_product: 'whatsapp',
+          to,
+          type: 'reaction',
+          reaction: { message_id: req.body.messageId, emoji: req.body?.emoji || '👍' },
+        };
+        break;
+
       case 'image':
       case 'video':
       case 'document':

@@ -26,24 +26,50 @@ router.post('/send', async (req, res, next) => {
     if (!to) return res.status(400).json({ error: 'to (PSID) is required' });
 
     let message;
-    if (card) {
+    if (req.body?.buttons?.length) {
+      // Button template: up to 3 buttons under a block of text, each either a
+      // web link or a postback the webhook receives back.
+      message = {
+        attachment: {
+          type: 'template',
+          payload: {
+            template_type: 'button',
+            text: text || 'Pick an option',
+            buttons: req.body.buttons.slice(0, 3).map((b) => ({
+              type: b.url ? 'web_url' : 'postback',
+              title: typeof b === 'string' ? b : b.title,
+              ...(b.url ? { url: b.url } : { payload: b.payload || (typeof b === 'string' ? b : b.title) }),
+            })),
+          },
+        },
+      };
+    } else if (req.body?.mediaUrl) {
+      message = {
+        attachment: {
+          type: req.body?.mediaType || 'image',
+          payload: { url: req.body.mediaUrl, is_reusable: true },
+        },
+      };
+    } else if (Array.isArray(card) || card) {
+      // A generic template takes up to 10 elements; more than one renders as a
+      // swipeable carousel rather than a single card.
+      const cards = Array.isArray(card) ? card : [card];
       message = {
         attachment: {
           type: 'template',
           payload: {
             template_type: 'generic',
-            elements: [
-              {
-                title: card.title || 'Card title',
-                subtitle: card.subtitle,
-                image_url: card.imageUrl,
-                buttons: (card.buttons || []).map((b) => ({
-                  type: b.url ? 'web_url' : 'postback',
-                  title: b.title,
-                  ...(b.url ? { url: b.url } : { payload: b.payload || b.title }),
-                })),
-              },
-            ],
+            elements: cards.slice(0, 10).map((c) => ({
+              title: c.title || 'Card title',
+              subtitle: c.subtitle,
+              image_url: c.imageUrl,
+              ...(c.url ? { default_action: { type: 'web_url', url: c.url } } : {}),
+              buttons: (c.buttons || []).map((b) => ({
+                type: b.url ? 'web_url' : 'postback',
+                title: b.title,
+                ...(b.url ? { url: b.url } : { payload: b.payload || b.title }),
+              })),
+            })),
           },
         },
       };
