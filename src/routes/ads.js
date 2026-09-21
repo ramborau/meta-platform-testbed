@@ -174,6 +174,9 @@ router.post('/showcase', async (req, res, next) => {
         objective: 'OUTCOME_TRAFFIC',
         status: 'PAUSED',
         special_ad_categories: [],
+        // Required whenever the budget sits on the ad set rather than the
+        // campaign. Left off, so ad sets never lend each other budget.
+        is_adset_budget_sharing_enabled: false,
       },
     });
     report.created.campaign = campaign.id;
