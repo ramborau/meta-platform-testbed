@@ -5,9 +5,14 @@
 // Meta allows exactly ONE callback URL per topic per app, so this OVERWRITES
 // whatever each topic currently points at. Run tools/backup-webhooks.mjs first.
 
-const [appId, appSecret, baseUrl, verifyToken, ...only] = process.argv.slice(2);
+const args = process.argv.slice(2);
+// --single points every topic at one shared /webhooks endpoint instead of a
+// path per product. The receiver dispatches on the payload's `object` field
+// either way, so this is purely about how much you paste into the dashboard.
+const single = args.includes('--single');
+const [appId, appSecret, baseUrl, verifyToken, ...only] = args.filter((a) => a !== '--single');
 if (!appId || !appSecret || !baseUrl || !verifyToken) {
-  console.error('usage: node tools/wire-webhooks.mjs <app_id> <app_secret> <base_url> <verify_token> [topic...]');
+  console.error('usage: node tools/wire-webhooks.mjs <app_id> <app_secret> <base_url> <verify_token> [--single] [topic...]');
   process.exit(1);
 }
 
@@ -63,7 +68,7 @@ let okCount = 0;
 let failCount = 0;
 
 for (const topic of wanted) {
-  const callbackUrl = `${base}${topic.path}`;
+  const callbackUrl = single ? `${base}/webhooks` : `${base}${topic.path}`;
   const body = new URLSearchParams({
     object: topic.object,
     callback_url: callbackUrl,
@@ -73,7 +78,7 @@ for (const topic of wanted) {
     access_token: appToken,
   });
 
-  process.stdout.write(`  ${topic.object.padEnd(26)} -> ${topic.path.padEnd(22)} `);
+  process.stdout.write(`  ${topic.object.padEnd(26)} -> ${(single ? '/webhooks' : topic.path).padEnd(22)} `);
   try {
     const res = await fetch(`https://graph.facebook.com/v23.0/${appId}/subscriptions`, {
       method: 'POST',
