@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { graph, exchangeEmbeddedSignupCode, debugToken } from './graph.js';
-import { addEvent, setConnection, rawConnections } from './store.js';
+import { addEvent, setConnection, rawConnections, resetConnections } from './store.js';
 
 // The "connect everything at once" engine.
 //
@@ -193,6 +193,16 @@ export async function onboardWithToken(
 
   report.requested = [...want];
   step('Applied asset selection', true, { requested: [...want] });
+
+  // Clear the previous connection now that discovery has succeeded, so a run
+  // that fails part way does not leave the service with nothing connected.
+  const cleared = resetConnections();
+  if (Object.values(cleared).some(Boolean)) {
+    step('Cleared the previous connection', true, cleared);
+    report.warnings.push(
+      `Replaced a previous connection (${cleared.whatsapp} WABA, ${cleared.pages} Pages, ${cleared.adAccounts} ad accounts). Only one business can be connected at a time.`
+    );
+  }
 
   // ------------------------------------------------- 5. hydrate + wire ------
 

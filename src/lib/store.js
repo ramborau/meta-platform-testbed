@@ -68,6 +68,30 @@ const connections = {
   adAccounts: [],
 };
 
+// Wipe every asset list before a new onboarding writes its own.
+//
+// Without this, connecting a second business leaves the previous one's Pages,
+// WABAs and ad accounts in place: the new token overwrites `user` but the asset
+// lists are only replaced when the new run happens to find something of that
+// type. The result is a connection that claims access to assets the live token
+// cannot touch, and every call against them fails with a misleading
+// "does not exist, cannot be loaded due to missing permissions".
+export function resetConnections() {
+  const had = {
+    whatsapp: connections.whatsapp.length,
+    pages: connections.pages.length,
+    instagram: connections.instagram.length,
+    adAccounts: connections.adAccounts.length,
+  };
+  connections.user = null;
+  connections.pages = [];
+  connections.instagram = [];
+  connections.whatsapp = [];
+  connections.adAccounts = [];
+  saveState('connections', connections).catch(() => {});
+  return had;
+}
+
 export function setConnection(key, value) {
   connections[key] = value;
   addEvent({ channel: 'system', kind: 'connection.updated', summary: `${key} updated`, payload: { key } });
