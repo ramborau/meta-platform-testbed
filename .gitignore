@@ -5,3 +5,9 @@ node_modules/
 data/
 *.log
 .DS_Store
+
+# Webhook restore points hold production callback URLs (which can embed path
+# tokens) and the rollback scripts embed the app secret. Never commit these.
+backups/
+webhook-backup-*.json
+restore-webhooks.sh
