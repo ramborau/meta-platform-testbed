@@ -32,12 +32,38 @@ const PAGE_FIELDS = [
 const IG_FIELDS = ['messages', 'messaging_postbacks', 'messaging_referral', 'messaging_seen', 'comments', 'live_comments', 'mentions'].join(',');
 
 export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = false, registerPin } = {}) {
+  if (!config.appId || !config.appSecret) {
+    throw new Error('META_APP_ID and META_APP_SECRET must be set on the server before onboarding.');
+  }
+
+  const tokenRes = await exchangeEmbeddedSignupCode(code);
+  if (!tokenRes.access_token) throw new Error('No access_token came back from the code exchange.');
+
+  return onboardWithToken(tokenRes.access_token, {
+    sessionInfo,
+    autoRegister,
+    registerPin,
+    tokenType: tokenRes.token_type,
+    expiresIn: tokenRes.expires_in ?? 'never',
+    source: 'embedded-signup-v4',
+  });
+}
+
+// Discovery and wiring, decoupled from how the token was obtained. Embedded
+// Signup is the normal path, but a token pasted from Graph API Explorer or
+// recovered elsewhere restores exactly the same state - which matters, because
+// a lost token cannot be re-fetched from Meta without another token.
+export async function onboardWithToken(
+  token,
+  { sessionInfo = {}, autoRegister = false, registerPin, tokenType, expiresIn = 'unknown', source = 'manual-token' } = {}
+) {
   const report = {
     startedAt: new Date().toISOString(),
     steps: [],
     assets: { whatsapp: [], pages: [], instagram: [], adAccounts: [], pixels: [] },
     wiring: [],
     warnings: [],
+    source,
   };
 
   const step = (name, ok, detail) => {
@@ -45,27 +71,35 @@ export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = f
     return ok;
   };
 
-  // ---------------------------------------------------- 1. code -> token ----
   if (!config.appId || !config.appSecret) {
     throw new Error('META_APP_ID and META_APP_SECRET must be set on the server before onboarding.');
   }
+  if (!token) throw new Error('An access token is required.');
 
-  const tokenRes = await exchangeEmbeddedSignupCode(code);
-  const token = tokenRes.access_token;
-  if (!token) throw new Error('No access_token came back from the code exchange.');
-  step('Exchanged authorization code for a business token', true, {
-    tokenType: tokenRes.token_type,
-    expiresIn: tokenRes.expires_in ?? 'never',
-  });
+  step(
+    source === 'embedded-signup-v4' ? 'Exchanged authorization code for a business token' : 'Adopted the supplied access token',
+    true,
+    { tokenType, expiresIn }
+  );
 
-  report.tokenType = tokenRes.token_type;
-  report.expiresIn = tokenRes.expires_in ?? 'never';
+  report.tokenType = tokenType;
+  report.expiresIn = expiresIn;
 
   // ------------------------------------------- 2. identify the client -------
+  // Validate before anything else. A dead or malformed token must fail loudly
+  // here rather than sail through and report a successful onboarding with zero
+  // assets, which looks like the customer granted nothing.
+  let me = null;
+  try {
+    me = await graph.get('me', { token, query: { fields: 'id,name,client_business_id' } });
+  } catch (err) {
+    throw new Error(`Access token rejected by Meta: ${err.error?.message || err.message}`);
+  }
+  if (!me?.id) throw new Error('Access token did not resolve to an identity.');
+
   // A business integration system user token knows which business portfolio it
-  // belongs to. User tokens do not, so this is allowed to fail softly.
+  // belongs to. User tokens do not, so that part is allowed to fail softly.
   let businessId = null;
-  const me = await graph.get('me', { token, query: { fields: 'id,name,client_business_id' } }).catch(() => null);
   if (me?.client_business_id) {
     businessId = me.client_business_id;
     step('Resolved the client business portfolio', true, { businessId });
@@ -246,8 +280,8 @@ export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = f
     accessToken: token,
     businessId,
     scopes,
-    source: 'embedded-signup-v4',
-    expiresAt: tokenRes.expires_in ? new Date(Date.now() + tokenRes.expires_in * 1000).toISOString() : 'never',
+    source,
+    expiresAt: typeof expiresIn === 'number' ? new Date(Date.now() + expiresIn * 1000).toISOString() : expiresIn,
     connectedAt: new Date().toISOString(),
   });
 

@@ -170,6 +170,13 @@ r = await fetch(B + '/api/connect/report');
 j = await r.json();
 ok('report endpoint responds', r.status === 200 && 'report' in j);
 
+r = await post('/api/connect/adopt-token', {});
+ok('adopt-token without a token is rejected', r.status === 400, `got ${r.status}`);
+r = await post('/api/connect/adopt-token', { token: 'BOGUS_TOKEN' });
+j = await r.json();
+ok('adopt-token rejects an invalid token instead of reporting success',
+  r.status >= 400 && Boolean(j.error), `${r.status} ${JSON.stringify(j).slice(0, 90)}`);
+
 r = await post('/api/connect/session', { type: 'WA_EMBEDDED_SIGNUP', event: 'CANCEL', data: { current_step: 'PHONE_NUMBER_SETUP' } });
 ok('session log accepted', r.status === 200);
 await wait(400);

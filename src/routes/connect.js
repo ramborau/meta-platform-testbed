@@ -1,6 +1,6 @@
 import express from 'express';
 import { config } from '../config.js';
-import { onboardFromCode, rewireExisting, PAGE_FIELDS, IG_FIELDS } from '../lib/onboard.js';
+import { onboardFromCode, onboardWithToken, rewireExisting, PAGE_FIELDS, IG_FIELDS } from '../lib/onboard.js';
 import { addEvent, getConnections } from '../lib/store.js';
 import { saveState, loadState } from '../lib/persist.js';
 
@@ -29,6 +29,25 @@ router.post('/exchange', async (req, res, next) => {
       summary: `Onboarding failed: ${err.message}`,
       payload: { error: err.message, fbError: err.error },
     });
+    next(err);
+  }
+});
+
+// POST /api/connect/adopt-token
+// Escape hatch. A business token cannot be re-fetched from Meta once lost - the
+// recovery endpoint itself requires a token with business_management on the same
+// business. So if you hold one from anywhere (Graph API Explorer, your own
+// records), this runs the identical discovery and wiring the code exchange does.
+router.post('/adopt-token', async (req, res, next) => {
+  try {
+    const { token, autoRegister = false, registerPin } = req.body || {};
+    if (!token) return res.status(400).json({ error: 'token is required' });
+
+    const report = await onboardWithToken(token, { autoRegister, registerPin, source: 'adopted-token' });
+    lastReport = report;
+    saveState('lastReport', report).catch(() => {});
+    res.json(report);
+  } catch (err) {
     next(err);
   }
 });
