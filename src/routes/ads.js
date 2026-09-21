@@ -3,6 +3,7 @@ import express from 'express';
 import { config } from '../config.js';
 import { graph } from '../lib/graph.js';
 import { resolveToken, rawConnections, addEvent } from '../lib/store.js';
+import { suiteDefinition, countCriteria } from '../lib/adsuite.js';
 
 export const router = express.Router();
 
@@ -395,6 +396,119 @@ router.post('/subscribe', async (req, res, next) => {
       form: { app_id: config.appId },
     });
     res.json({ ok: true, adAccount: id, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/ads/suite
+// Builds six campaigns covering the feature surface: micro-targeting, custom
+// audiences, frequency capping and day-parting, lead generation, a WhatsApp
+// messaging destination, and lifetime budget with a bid cap.
+//
+// Each campaign is built independently so one rejection does not abort the
+// rest, and the exact Meta error is reported per campaign.
+router.post('/suite', async (req, res, next) => {
+  try {
+    const accountId = String(req.body?.accountId || acct()?.replace(/^act_/, '') || '').replace(/^act_/, '');
+    if (!accountId) return res.status(400).json({ error: 'No ad account available' });
+
+    const conns = rawConnections();
+    const pageId = req.body?.pageId || config.page.id || conns.pages[0]?.id;
+    if (!pageId) return res.status(400).json({ error: 'A Page is required' });
+
+    const token = resolveToken('ads');
+    const act = `act_${accountId}`;
+    const link = req.body?.link || `${config.publicUrl}/`;
+    const dailyBudget = String(req.body?.dailyBudget || 20000);
+
+    // Reuse whatever audiences already exist rather than making more.
+    const existing = await graph
+      .get(`${act}/customaudiences`, { token, query: { fields: 'id,name,subtype', limit: 50 } })
+      .catch(() => ({ data: [] }));
+    const find = (pred) => (existing.data || []).find(pred)?.id;
+    const audiences = {
+      pageEngagers: req.body?.audiences?.pageEngagers || find((a) => /FB Page engagers/i.test(a.name)),
+      igEngagers: req.body?.audiences?.igEngagers || find((a) => /IG engagers/i.test(a.name)),
+      lookalike: req.body?.audiences?.lookalike || find((a) => a.subtype === 'LOOKALIKE'),
+    };
+
+    const definitions = suiteDefinition({ pageId, audiences, link });
+    const report = { accountId, pageId, audiences, campaigns: [] };
+
+    for (const def of definitions) {
+      const entry = {
+        key: def.key,
+        name: def.name,
+        objective: def.objective,
+        feature: def.feature,
+        criteriaCount: countCriteria(def.adset.targeting),
+      };
+
+      try {
+        const campaign = await graph.post(`${act}/campaigns`, {
+          token,
+          body: {
+            name: def.name,
+            objective: def.objective,
+            status: 'PAUSED',
+            special_ad_categories: [],
+            is_adset_budget_sharing_enabled: false,
+          },
+        });
+        entry.campaignId = campaign.id;
+      } catch (err) {
+        entry.error = describeAdError(err);
+        entry.failedAt = 'campaign';
+        report.campaigns.push(entry);
+        continue;
+      }
+
+      try {
+        const { targeting, name, ...rest } = def.adset;
+        const budget = def.lifetime
+          ? { lifetime_budget: String(Number(dailyBudget) * 7), end_time: new Date(Date.now() + 21 * 864e5).toISOString() }
+          : { daily_budget: dailyBudget };
+
+        const adset = await graph.post(`${act}/adsets`, {
+          token,
+          body: {
+            name,
+            campaign_id: entry.campaignId,
+            status: 'PAUSED',
+            ...budget,
+            ...(rest.bid_strategy ? {} : { bid_strategy: 'LOWEST_COST_WITHOUT_CAP' }),
+            ...rest,
+            targeting,
+            start_time: new Date(Date.now() + 7 * 864e5).toISOString(),
+          },
+        });
+        entry.adsetId = adset.id;
+        entry.ok = true;
+      } catch (err) {
+        entry.error = describeAdError(err);
+        entry.failedAt = 'adset';
+      }
+
+      report.campaigns.push(entry);
+    }
+
+    report.summary = {
+      campaigns: report.campaigns.filter((c) => c.campaignId).length,
+      adsets: report.campaigns.filter((c) => c.adsetId).length,
+      failed: report.campaigns.filter((c) => !c.ok).length,
+      maxCriteria: Math.max(...report.campaigns.map((c) => c.criteriaCount || 0)),
+      status: 'ALL PAUSED',
+    };
+
+    addEvent({
+      channel: 'ads',
+      kind: 'suite.created',
+      summary: `Ad suite: ${report.summary.campaigns} campaigns, ${report.summary.adsets} ad sets, ${report.summary.failed} failed`,
+      payload: report.summary,
+    });
+
+    res.json(report);
   } catch (err) {
     next(err);
   }
