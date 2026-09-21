@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<main style="max-width:760px">
+  <div class="card">
+    <h2>Privacy Policy</h2>
+    <p class="hint">This URL exists so the Meta App Dashboard accepts the app configuration. This is an internal development and testing tool, not a consumer product.</p>
+
+    <h3>What this application is</h3>
+    <p>A developer testbed used to exercise Meta's Graph API, Marketing API, WhatsApp Cloud API, Instagram Messaging and Messenger Platform webhooks. It is operated by the app owner for their own testing.</p>
+
+    <h3>What data is processed</h3>
+    <p>When a webhook fires, the payload Meta delivers is held in the server's memory so a developer can inspect it. This may include a sender's platform-scoped ID, display name, and message content. Access tokens obtained through Facebook Login or Embedded Signup are held in memory for the life of the process and are used only to call Meta APIs on the connecting user's behalf.</p>
+
+    <h3>Retention</h3>
+    <p>Nothing is written to a database or to disk. Events live in a bounded in-memory buffer capped at a few hundred records, and every record is discarded when the process restarts or redeploys. There is no analytics, no third-party sharing and no advertising use of this data.</p>
+
+    <h3>Deletion</h3>
+    <p>Because no data is persisted, a restart erases everything. A formal request can be made through the Data Deletion Callback registered for this app, which returns a confirmation code and status URL.</p>
+
+    <h3>Contact</h3>
+    <p>Reach the app owner through the contact email listed on the app's Meta App Dashboard entry.</p>
+
+    <p style="margin-top:22px"><a href="/" style="color:var(--accent)">← Back to the console</a></p>
+  </div>
+</main>
+</body>
+</html>

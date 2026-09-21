@@ -1,0 +1,50 @@
+services:
+  - type: web
+    name: meta-all-testbed
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: GRAPH_VERSION
+        value: v23.0
+      - key: ENFORCE_SIGNATURE
+        value: "true"
+      - key: REQUIRE_AUTH
+        value: "true"
+      - key: KEEP_ALIVE
+        value: "true"
+      # Set these in the Render dashboard - never commit them.
+      - key: META_APP_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: VERIFY_TOKEN
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: WA_EMBEDDED_CONFIG_ID
+        sync: false
+      - key: WA_ACCESS_TOKEN
+        sync: false
+      - key: WA_PHONE_NUMBER_ID
+        sync: false
+      - key: WA_BUSINESS_ACCOUNT_ID
+        sync: false
+      - key: PAGE_ACCESS_TOKEN
+        sync: false
+      - key: PAGE_ID
+        sync: false
+      - key: IG_ACCESS_TOKEN
+        sync: false
+      - key: IG_USER_ID
+        sync: false
+      - key: ADS_ACCESS_TOKEN
+        sync: false
+      - key: ADS_AD_ACCOUNT_ID
+        sync: false

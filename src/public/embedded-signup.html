@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WhatsApp Embedded Signup</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot live"></span> WhatsApp Embedded Signup</div>
+  <div class="header-meta"><a href="/" style="color:var(--accent);text-decoration:none">← Back to console</a></div>
+</header>
+
+<main style="max-width:840px">
+  <div class="card">
+    <h2>Onboard a WhatsApp Business Account</h2>
+    <p class="hint">
+      This runs the real Embedded Signup flow: the customer authenticates, picks or creates a business portfolio and
+      WABA, verifies a phone number, and grants this app access to it. The window returns an authorization
+      <code>code</code>, which the server exchanges for a business-scoped token and then subscribes to the WABA.
+    </p>
+
+    <div id="preflight"></div>
+
+    <div class="row">
+      <button class="btn" id="launch" style="background:var(--wa)" disabled>Continue with Facebook</button>
+      <button class="btn ghost" id="reset">Reset</button>
+    </div>
+
+    <h3>Live session log</h3>
+    <p class="hint">The SDK posts progress here via <code>window.postMessage</code>. If the flow fails, the failing step shows up in this log.</p>
+    <pre class="out" id="log">Waiting…</pre>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>What the server does with the code</h2>
+    <ol style="color:var(--muted);font-size:13px;line-height:1.9;padding-left:20px">
+      <li><code>GET /oauth/access_token?client_id&amp;client_secret&amp;code</code> — no <code>redirect_uri</code>, unlike normal OAuth. Returns a business integration system-user token.</li>
+      <li><code>GET /debug_token</code> — reads <code>granular_scopes</code> to learn which WABA the token is bound to.</li>
+      <li><code>POST /{waba-id}/subscribed_apps</code> — <strong>this is what turns on message webhooks.</strong> Skip it and you get nothing.</li>
+      <li><code>POST /{phone-number-id}/register</code> — registers the number on Cloud API with a 6-digit PIN (optional here).</li>
+      <li><code>GET /{waba-id}/phone_numbers</code> — resolves the Phone Number ID you will send with.</li>
+    </ol>
+  </div>
+</main>
+
+<script>
+const log = (...args) => {
+  const el = document.getElementById('log');
+  const line = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a, null, 2))).join(' ');
+  el.textContent = el.textContent === 'Waiting…' ? line : `${el.textContent}\n${line}`;
+  el.scrollTop = el.scrollHeight;
+};
+
+let CONFIG = {};
+let sessionInfo = {};
+
+// The SDK reports each step of the flow through postMessage. Capture it so a
+// failed signup tells you which step broke instead of just closing the window.
+window.addEventListener('message', (event) => {
+  if (!/^https:\/\/www\.facebook\.com|^https:\/\/web\.facebook\.com/.test(event.origin)) return;
+  try {
+    const data = JSON.parse(event.data);
+    if (data.type !== 'WA_EMBEDDED_SIGNUP') return;
+    log('session:', data);
+    if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
+      sessionInfo = data.data || {};
+      log(`✅ WABA ${sessionInfo.waba_id}  ·  Phone Number ID ${sessionInfo.phone_number_id}`);
+    } else if (data.event === 'CANCEL') {
+      log(`⚠️ Cancelled at step: ${data.data?.current_step}`);
+    } else if (data.event === 'ERROR') {
+      log(`❌ Error: ${data.data?.error_message}`);
+    }
+    fetch('/api/whatsapp/embedded-signup/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(data),
+    }).catch(() => {});
+  } catch {
+    // Non-JSON postMessages from the SDK are normal - ignore them.
+  }
+});
+
+async function fbLoginCallback(response) {
+  log('login response:', response);
+  const code = response?.authResponse?.code;
+  if (!code) {
+    log('❌ No authorization code returned. Check that the configuration ID is an Embedded Signup config.');
+    return;
+  }
+  log('Exchanging code on the server…');
+  try {
+    const res = await fetch('/api/whatsapp/embedded-signup/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        wabaId: sessionInfo.waba_id,
+        phoneNumberId: sessionInfo.phone_number_id,
+        autoSubscribe: true,
+      }),
+    });
+    const json = await res.json();
+    log(res.ok ? '✅ Onboarded:' : '❌ Exchange failed:', json);
+  } catch (err) {
+    log('❌ Request failed:', err.message);
+  }
+}
+
+function launchWhatsAppSignup() {
+  FB.login(fbLoginCallback, {
+    config_id: CONFIG.embeddedSignupConfigId,
+    response_type: 'code',
+    override_default_response_type: true,
+    extras: {
+      setup: {},
+      featureType: '',
+      sessionInfoVersion: '3',
+    },
+  });
+}
+
+(async function init() {
+  CONFIG = await fetch('/api/config').then((r) => r.json());
+
+  const problems = [];
+  if (!CONFIG.appId) problems.push('<code>META_APP_ID</code> is not set on the server.');
+  if (!CONFIG.hasAppSecret) problems.push('<code>META_APP_SECRET</code> is not set on the server.');
+  if (!CONFIG.embeddedSignupConfigId)
+    problems.push('<code>WA_EMBEDDED_CONFIG_ID</code> is not set. Create one under App Dashboard → Facebook Login for Business → Configurations, using the <em>WhatsApp Embedded Signup</em> template.');
+
+  const pre = document.getElementById('preflight');
+  if (problems.length) {
+    pre.innerHTML = `<div class="rule" style="border-color:var(--amber)">
+      <div class="rule-head"><span class="pill warn">not ready</span></div>
+      <div class="rule-body"><ul style="margin:6px 0 0;padding-left:18px">${problems.map((p) => `<li>${p}</li>`).join('')}</ul></div></div>`;
+    log('Preflight failed - fix the items above, then reload.');
+    return;
+  }
+
+  pre.innerHTML = `<div class="rule" style="border-color:var(--wa)">
+    <div class="rule-head"><span class="pill ok">ready</span>
+    <span class="pill">App ${CONFIG.appId}</span>
+    <span class="pill whatsapp">Config ${CONFIG.embeddedSignupConfigId}</span></div></div>`;
+
+  // Load the Facebook JS SDK.
+  window.fbAsyncInit = function () {
+    FB.init({ appId: CONFIG.appId, cookie: true, xfbml: true, version: CONFIG.graphVersion });
+    document.getElementById('launch').disabled = false;
+    log('SDK ready. Click Continue with Facebook to start.');
+  };
+  const s = document.createElement('script');
+  s.src = 'https://connect.facebook.net/en_US/sdk.js';
+  s.async = true;
+  s.defer = true;
+  s.crossOrigin = 'anonymous';
+  document.head.appendChild(s);
+})();
+
+document.getElementById('launch').addEventListener('click', launchWhatsAppSignup);
+document.getElementById('reset').addEventListener('click', () => {
+  sessionInfo = {};
+  document.getElementById('log').textContent = 'Waiting…';
+});
+</script>
+</body>
+</html>

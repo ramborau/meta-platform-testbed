@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meta Platform Testbed</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🧪</text></svg>">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="dot" id="live-dot"></span>
+    Meta Platform Testbed
+  </div>
+  <div class="header-meta">
+    <span>App ID <code id="hdr-appid">—</code></span>
+    <span>Graph <code id="hdr-graph">—</code></span>
+    <span id="hdr-sig"></span>
+    <span id="hdr-user">Not connected</span>
+  </div>
+</header>
+
+<nav>
+  <button class="active" data-tab="setup">Setup</button>
+  <button data-tab="events">Live Events</button>
+  <button data-tab="whatsapp">WhatsApp</button>
+  <button data-tab="instagram">Instagram</button>
+  <button data-tab="messenger">Messenger</button>
+  <button data-tab="ads">Ads</button>
+  <button data-tab="bots">Automations</button>
+  <button data-tab="graph">Graph Explorer</button>
+</nav>
+
+<main>
+
+  <!-- ============================================================ SETUP -->
+  <section class="tab active" id="tab-setup">
+    <div class="card">
+      <h2>Paste these into the Meta App Dashboard</h2>
+      <p class="hint">Every URL below is live right now. The Verify Token is what Meta echoes back during the webhook handshake — it must match exactly.</p>
+      <div id="url-list"></div>
+    </div>
+
+    <div class="grid two" style="margin-top:16px">
+      <div class="card">
+        <h2>Connect your account</h2>
+        <p class="hint">Runs Facebook Login and pulls your Pages, Instagram accounts, ad accounts and WABAs in one shot.</p>
+        <div class="row">
+          <a href="/auth/facebook/login"><button class="btn">Login with Facebook</button></a>
+          <button class="btn ghost" id="btn-refresh-conn">Refresh</button>
+        </div>
+        <h3>Or paste a token</h3>
+        <p class="hint">From Graph API Explorer — fastest way to start testing before OAuth is configured.</p>
+        <input id="manual-token" placeholder="EAAG..." autocomplete="off">
+        <div class="row tight"><button class="btn ghost" id="btn-manual-token">Use this token</button></div>
+        <pre class="out" id="conn-out" style="display:none"></pre>
+      </div>
+
+      <div class="card">
+        <h2>Connected assets</h2>
+        <p class="hint">Tokens are shown fingerprinted only — the full value never leaves the server.</p>
+        <div id="connections"><div class="empty">Nothing connected yet.</div></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Wiring checklist</h2>
+      <p class="hint">The order that actually works. Steps 5 and 7 are the two people forget, and they are why webhooks silently never arrive.</p>
+      <ul class="checklist">
+        <li><span class="mark">1.</span><div>App Dashboard → <strong>App Settings → Basic</strong>: copy App ID and App Secret into the Render environment (<code>META_APP_ID</code>, <code>META_APP_SECRET</code>), then set Privacy Policy, Terms and Data Deletion URLs from the list above.</div></li>
+        <li><span class="mark">2.</span><div>Add <strong>Facebook Login for Business</strong> → Settings → paste the OAuth Redirect URI above into <em>Valid OAuth Redirect URIs</em>.</div></li>
+        <li><span class="mark">3.</span><div>Add the products you want: <strong>WhatsApp</strong>, <strong>Messenger</strong>, <strong>Instagram</strong>, <strong>Marketing API</strong>.</div></li>
+        <li><span class="mark">4.</span><div>For each product → <strong>Configuration → Webhooks → Edit</strong>: paste that product's Callback URL and the Verify Token, then Verify and Save.</div></li>
+        <li><span class="mark">5.</span><div><strong>Subscribe to the fields</strong> after verifying — an empty field list means a verified URL that receives nothing. WhatsApp: <code>messages</code>. Instagram: <code>messages</code>, <code>comments</code>. Page: <code>messages</code>, <code>messaging_postbacks</code>, <code>feed</code>.</div></li>
+        <li><span class="mark">6.</span><div>WhatsApp → create an <strong>Embedded Signup configuration</strong> under Facebook Login for Business → Configurations, and set <code>WA_EMBEDDED_CONFIG_ID</code> in Render.</div></li>
+        <li><span class="mark">7.</span><div><strong>Subscribe the app to each asset</strong>: WABA, Page and ad account each need their own <code>/subscribed_apps</code> call. Use the buttons on the channel tabs.</div></li>
+        <li><span class="mark">8.</span><div>Add yourself under <strong>App Roles → Roles</strong>, and for WhatsApp add test recipient numbers — in dev mode you can only message allow-listed numbers.</div></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- =========================================================== EVENTS -->
+  <section class="tab" id="tab-events">
+    <div class="grid three" id="stats"></div>
+    <div class="card" style="margin-top:16px">
+      <div class="row" style="margin:0 0 12px; justify-content:space-between">
+        <div>
+          <h2 style="margin:0">Live webhook feed</h2>
+          <p class="hint" style="margin:2px 0 0">Streaming over SSE. Click any event to see the raw payload Meta sent.</p>
+        </div>
+        <div class="row" style="margin:0">
+          <select id="filter-channel" style="width:auto">
+            <option value="">All channels</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="instagram">Instagram</option>
+            <option value="messenger">Messenger</option>
+            <option value="ads">Ads</option>
+            <option value="api">Graph API calls</option>
+            <option value="system">System</option>
+          </select>
+          <button class="btn ghost sm" id="btn-reload-events">Reload</button>
+          <button class="btn danger sm" id="btn-clear-events">Clear</button>
+        </div>
+      </div>
+      <div class="feed" id="feed"><div class="empty">Waiting for events…</div></div>
+    </div>
+  </section>
+
+  <!-- ========================================================= WHATSAPP -->
+  <section class="tab" id="tab-whatsapp">
+    <div class="grid two">
+      <div class="card">
+        <h2>Send a WhatsApp message</h2>
+        <p class="hint">Free-form text only works inside the 24-hour customer service window. Outside it, use a template.</p>
+        <label>Recipient (E.164, no +)</label>
+        <input id="wa-to" placeholder="919876543210">
+        <label>Message type</label>
+        <select id="wa-type">
+          <option value="text">Text</option>
+          <option value="interactive">Interactive buttons</option>
+          <option value="template">Template</option>
+          <option value="image">Image</option>
+        </select>
+        <div id="wa-text-wrap">
+          <label>Text</label>
+          <textarea id="wa-text">Hello from the testbed 👋</textarea>
+        </div>
+        <div id="wa-buttons-wrap" style="display:none">
+          <label>Buttons (comma separated, max 3)</label>
+          <input id="wa-buttons" value="Yes, No, Tell me more">
+        </div>
+        <div id="wa-template-wrap" style="display:none">
+          <label>Template name</label>
+          <input id="wa-template" placeholder="hello_world">
+          <label>Language code</label>
+          <input id="wa-lang" value="en_US">
+        </div>
+        <div id="wa-media-wrap" style="display:none">
+          <label>Media URL</label>
+          <input id="wa-media" placeholder="https://example.com/image.jpg">
+        </div>
+        <label>Phone Number ID (blank = server default)</label>
+        <input id="wa-pnid" placeholder="from WA_PHONE_NUMBER_ID">
+        <div class="row"><button class="btn" id="btn-wa-send">Send</button></div>
+        <pre class="out" id="wa-out" style="display:none"></pre>
+      </div>
+
+      <div class="card">
+        <h2>WABA tools</h2>
+        <p class="hint">Subscribing the app to the WABA is what actually turns on message webhooks.</p>
+        <label>WABA ID (blank = server default)</label>
+        <input id="wa-waba" placeholder="from WA_BUSINESS_ACCOUNT_ID">
+        <div class="row">
+          <button class="btn" id="btn-wa-subscribe">Subscribe app to WABA</button>
+          <button class="btn ghost" id="btn-wa-numbers">List numbers</button>
+          <button class="btn ghost" id="btn-wa-templates">List templates</button>
+        </div>
+        <h3>Embedded Signup</h3>
+        <p class="hint">Onboard a customer's WhatsApp number under your app, end to end.</p>
+        <div class="row tight">
+          <a href="/embedded-signup" target="_blank"><button class="btn ghost">Open Embedded Signup →</button></a>
+        </div>
+        <h3>Register a number</h3>
+        <label>Phone Number ID</label>
+        <input id="wa-reg-pnid" placeholder="123456789012345">
+        <label>6-digit PIN</label>
+        <input id="wa-reg-pin" value="000000" maxlength="6">
+        <div class="row tight"><button class="btn ghost" id="btn-wa-register">Register on Cloud API</button></div>
+        <pre class="out" id="wa-tools-out" style="display:none"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== INSTAGRAM -->
+  <section class="tab" id="tab-instagram">
+    <div class="grid two">
+      <div class="card">
+        <h2>Send an Instagram DM</h2>
+        <p class="hint">Needs the IGSID of someone who messaged you first — grab one from the Live Events feed.</p>
+        <label>Recipient IGSID</label>
+        <input id="ig-to" placeholder="17841400000000000">
+        <label>Message</label>
+        <textarea id="ig-text">Hey! This is an automated reply 🤖</textarea>
+        <label>Quick replies (comma separated, optional)</label>
+        <input id="ig-quick" placeholder="Pricing, Book a demo, Talk to a human">
+        <div class="row"><button class="btn" id="btn-ig-send">Send DM</button></div>
+        <pre class="out" id="ig-out" style="display:none"></pre>
+      </div>
+
+      <div class="card">
+        <h2>Comment automation</h2>
+        <p class="hint">A comment can be answered publicly on the thread, or privately as a DM. Private replies are allowed once per comment.</p>
+        <label>Comment ID</label>
+        <input id="ig-comment" placeholder="17900000000000000">
+        <label>Reply text</label>
+        <textarea id="ig-comment-text">Thanks for reaching out! Sending you the details in a DM 📩</textarea>
+        <div class="row">
+          <button class="btn" id="btn-ig-private">Send as private DM</button>
+          <button class="btn ghost" id="btn-ig-public">Reply publicly</button>
+        </div>
+        <h3>Account</h3>
+        <div class="row tight">
+          <button class="btn ghost" id="btn-ig-account">Profile</button>
+          <button class="btn ghost" id="btn-ig-media">Recent media</button>
+          <button class="btn ghost" id="btn-ig-convos">Conversations</button>
+        </div>
+        <pre class="out" id="ig-tools-out" style="display:none"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================== MESSENGER -->
+  <section class="tab" id="tab-messenger">
+    <div class="grid two">
+      <div class="card">
+        <h2>Send a Messenger message</h2>
+        <p class="hint">Needs a PSID from someone who messaged your Page. Outside 24 hours you need a message tag.</p>
+        <label>Recipient PSID</label>
+        <input id="fb-to" placeholder="7712345678901234">
+        <label>Message</label>
+        <textarea id="fb-text">Hello from the Page bot 👋</textarea>
+        <label>Quick replies (comma separated, optional)</label>
+        <input id="fb-quick" placeholder="Pricing, Demo, Support">
+        <label>Messaging type</label>
+        <select id="fb-type">
+          <option value="RESPONSE">RESPONSE (within 24h)</option>
+          <option value="UPDATE">UPDATE</option>
+          <option value="MESSAGE_TAG">MESSAGE_TAG (outside 24h)</option>
+        </select>
+        <label>Tag (only for MESSAGE_TAG)</label>
+        <select id="fb-tag">
+          <option value="">—</option>
+          <option value="CONFIRMED_EVENT_UPDATE">CONFIRMED_EVENT_UPDATE</option>
+          <option value="POST_PURCHASE_UPDATE">POST_PURCHASE_UPDATE</option>
+          <option value="ACCOUNT_UPDATE">ACCOUNT_UPDATE</option>
+          <option value="HUMAN_AGENT">HUMAN_AGENT</option>
+        </select>
+        <div class="row"><button class="btn" id="btn-fb-send">Send</button></div>
+        <pre class="out" id="fb-out" style="display:none"></pre>
+      </div>
+
+      <div class="card">
+        <h2>Page setup</h2>
+        <p class="hint">A Page needs its own <code>/subscribed_apps</code> call on top of the app-level webhook config.</p>
+        <label>Page ID (blank = first connected page)</label>
+        <input id="fb-page" placeholder="from PAGE_ID">
+        <div class="row">
+          <button class="btn" id="btn-fb-subscribe">Subscribe app to Page</button>
+          <button class="btn ghost" id="btn-fb-subs">Show subscriptions</button>
+          <button class="btn ghost" id="btn-fb-convos">Conversations</button>
+        </div>
+        <h3>Messenger profile</h3>
+        <label>Greeting text</label>
+        <input id="fb-greeting" value="Hi! Tap Get Started to talk to our bot.">
+        <label>Persistent menu (comma separated)</label>
+        <input id="fb-menu" value="Pricing, Book a demo, Talk to a human">
+        <div class="row tight"><button class="btn ghost" id="btn-fb-profile">Apply profile</button></div>
+        <pre class="out" id="fb-tools-out" style="display:none"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================= ADS -->
+  <section class="tab" id="tab-ads">
+    <div class="card">
+      <h2>Ad accounts</h2>
+      <p class="hint">Reads through the Marketing API with whichever token is connected.</p>
+      <div class="row" style="margin-top:0">
+        <button class="btn" id="btn-ads-accounts">Load ad accounts</button>
+        <select id="ads-account" style="width:auto;min-width:260px"><option value="">— select an account —</option></select>
+      </div>
+      <div id="ads-accounts-table"></div>
+    </div>
+
+    <div class="grid two" style="margin-top:16px">
+      <div class="card">
+        <h2>Campaigns &amp; performance</h2>
+        <label>Date preset</label>
+        <select id="ads-preset">
+          <option value="today">Today</option>
+          <option value="last_7d" selected>Last 7 days</option>
+          <option value="last_14d">Last 14 days</option>
+          <option value="last_30d">Last 30 days</option>
+          <option value="this_month">This month</option>
+          <option value="maximum">Maximum</option>
+        </select>
+        <label>Insights level</label>
+        <select id="ads-level">
+          <option value="account">Account</option>
+          <option value="campaign" selected>Campaign</option>
+          <option value="adset">Ad set</option>
+          <option value="ad">Ad</option>
+        </select>
+        <div class="row">
+          <button class="btn" id="btn-ads-campaigns">Campaigns</button>
+          <button class="btn ghost" id="btn-ads-insights">Insights</button>
+          <button class="btn ghost" id="btn-ads-subscribe">Subscribe to webhooks</button>
+        </div>
+        <div id="ads-result"></div>
+      </div>
+
+      <div class="card">
+        <h2>Create a test campaign</h2>
+        <p class="hint">Always created <strong>PAUSED</strong> — nothing in this testbed can start spending money on its own.</p>
+        <label>Campaign name</label>
+        <input id="ads-name" value="Testbed campaign">
+        <label>Objective</label>
+        <select id="ads-objective">
+          <option value="OUTCOME_ENGAGEMENT">OUTCOME_ENGAGEMENT</option>
+          <option value="OUTCOME_TRAFFIC">OUTCOME_TRAFFIC</option>
+          <option value="OUTCOME_LEADS">OUTCOME_LEADS</option>
+          <option value="OUTCOME_AWARENESS">OUTCOME_AWARENESS</option>
+          <option value="OUTCOME_SALES">OUTCOME_SALES</option>
+        </select>
+        <label>Daily budget (minor units, e.g. 10000 = ₹100)</label>
+        <input id="ads-budget" placeholder="10000">
+        <div class="row"><button class="btn" id="btn-ads-create">Create paused campaign</button></div>
+        <h3>Lead Ads</h3>
+        <p class="hint">The <code>leadgen</code> webhook only gives you an ID — fetch the answers here.</p>
+        <label>Leadgen ID</label>
+        <input id="ads-leadid" placeholder="from the leadgen webhook">
+        <div class="row tight"><button class="btn ghost" id="btn-ads-lead">Fetch lead</button></div>
+        <pre class="out" id="ads-out" style="display:none"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ BOTS -->
+  <section class="tab" id="tab-bots">
+    <div class="grid two">
+      <div class="card">
+        <h2>Automation rules</h2>
+        <p class="hint">Every inbound message runs through these top-down. First match wins, then the bot replies on the same channel.</p>
+        <div id="rules"></div>
+      </div>
+
+      <div class="card">
+        <h2>New rule</h2>
+        <label>Name</label>
+        <input id="rule-name" placeholder="Order status">
+        <label>Channels</label>
+        <div class="row tight" style="margin:4px 0 0">
+          <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" class="rule-ch" value="whatsapp" checked style="width:auto"> WhatsApp</label>
+          <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" class="rule-ch" value="instagram" style="width:auto"> Instagram</label>
+          <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" class="rule-ch" value="messenger" style="width:auto"> Messenger</label>
+        </div>
+        <label>Trigger type</label>
+        <select id="rule-trigger">
+          <option value="keyword">Keyword in a message</option>
+          <option value="postback">Button / postback payload</option>
+          <option value="comment">Comment text</option>
+          <option value="any">Any message</option>
+        </select>
+        <label>Match (comma separated, or a regex)</label>
+        <input id="rule-match" placeholder="order, status, track">
+        <label>Match mode</label>
+        <select id="rule-mode">
+          <option value="contains">Contains (word boundary)</option>
+          <option value="exact">Exact</option>
+          <option value="starts_with">Starts with</option>
+          <option value="regex">Regex</option>
+          <option value="any">Any</option>
+        </select>
+        <label>Action</label>
+        <select id="rule-action">
+          <option value="text">Send text reply</option>
+          <option value="private_reply">DM the commenter (Instagram)</option>
+        </select>
+        <label>Reply body — supports {{name}}, {{text}}, {{sender}}</label>
+        <textarea id="rule-body">Hi {{name}}, you said "{{text}}". Let me look that up.</textarea>
+        <div class="row"><button class="btn" id="btn-rule-add">Add rule</button></div>
+
+        <h3>Simulate</h3>
+        <p class="hint">Dry-run a message against your rules. Nothing is sent.</p>
+        <div class="row tight">
+          <select id="sim-channel" style="width:auto">
+            <option value="whatsapp">WhatsApp</option>
+            <option value="instagram">Instagram</option>
+            <option value="messenger">Messenger</option>
+          </select>
+          <input id="sim-text" placeholder="hi" style="flex:1;min-width:160px">
+          <button class="btn ghost" id="btn-sim">Test</button>
+        </div>
+        <pre class="out" id="sim-out" style="display:none"></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========================================================== GRAPH -->
+  <section class="tab" id="tab-graph">
+    <div class="card">
+      <h2>Graph API explorer</h2>
+      <p class="hint">Hits any edge server-side with the connected token and an appsecret_proof. Every call lands in the Live Events feed.</p>
+      <div class="row" style="margin-top:0">
+        <select id="gq-method" style="width:auto"><option>GET</option><option>POST</option><option>DELETE</option></select>
+        <select id="gq-channel" style="width:auto">
+          <option value="ads">User token</option>
+          <option value="whatsapp">WhatsApp token</option>
+          <option value="messenger">Page token</option>
+          <option value="instagram">Instagram token</option>
+        </select>
+        <input id="gq-path" placeholder="me/accounts" style="flex:1;min-width:200px">
+        <button class="btn" id="btn-gq">Send</button>
+      </div>
+      <label>Query params (JSON)</label>
+      <textarea id="gq-query" style="min-height:56px">{"fields":"id,name"}</textarea>
+      <label>Body (JSON, for POST)</label>
+      <textarea id="gq-body" style="min-height:56px"></textarea>
+      <pre class="out" id="gq-out" style="display:none"></pre>
+    </div>
+  </section>
+
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>
