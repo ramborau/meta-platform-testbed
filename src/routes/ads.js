@@ -439,23 +439,43 @@ router.post('/audiences', async (req, res, next) => {
       // Meta requires the provenance of uploaded records to be declared.
       body.customer_file_source = req.body?.customerFileSource || 'USER_PROVIDED_ONLY';
     } else if (subtype === 'ENGAGEMENT') {
-      const source = objectId || rawConnections().pages[0]?.id;
-      if (!source) return res.status(400).json({ error: 'objectId (Page or IG id) is required for ENGAGEMENT' });
+      // sourceType decides which engagement events are valid:
+      //   page        page_engaged | page_visited | page_liked | page_messaged
+      //               page_cta_clicked | page_or_post_save | page_post_interaction
+      //   ig_business ig_business_profile_engaged | ig_business_profile_visited ...
+      const sourceType = req.body?.sourceType || 'page';
+      const source =
+        objectId ||
+        (sourceType === 'ig_business' ? rawConnections().instagram[0]?.id : rawConnections().pages[0]?.id);
+      if (!source) return res.status(400).json({ error: 'objectId (Page or Instagram id) is required for ENGAGEMENT' });
+
+      // Meta rejects "=" here with a misleading "Invalid event name" error even
+      // when the event name is correct. Engagement rules want "eq".
       body.rule = JSON.stringify({
         inclusions: {
           operator: 'or',
           rules: [
             {
-              event_sources: [{ type: 'page', id: String(source) }],
+              event_sources: [{ type: sourceType, id: String(source) }],
               retention_seconds: retentionDays * 86400,
               filter: {
                 operator: 'and',
-                filters: [{ field: 'event', operator: '=', value: eventName || 'page_engaged' }],
+                filters: [
+                  {
+                    field: 'event',
+                    operator: 'eq',
+                    value: eventName || (sourceType === 'ig_business' ? 'ig_business_profile_engaged' : 'page_engaged'),
+                  },
+                ],
               },
             },
           ],
         },
       });
+      // Backfill with people who already engaged inside the retention window.
+      body.prefill = 1;
+      // subtype is not accepted alongside an engagement rule.
+      delete body.subtype;
     } else if (subtype === 'WEBSITE') {
       if (!pixelId) return res.status(400).json({ error: 'pixelId is required for WEBSITE' });
       body.rule = JSON.stringify({
