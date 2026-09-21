@@ -274,31 +274,44 @@ router.post('/showcase', async (req, res, next) => {
     ];
 
     for (const format of formats) {
+      const entry = { format: format.key, label: format.label, creative: false, ad: false };
+
+      // Creative and ad are reported separately: a creative can build perfectly
+      // while the ad is refused for an account-level reason such as billing,
+      // and collapsing both into one "failed" hides which half actually worked.
       try {
         const creative = await graph.post(`${act}/adcreatives`, {
           token,
           body: { name: `[Testbed] ${format.label}`, object_story_spec: format.spec },
         });
+        entry.creative = true;
+        entry.creativeId = creative.id;
+      } catch (err) {
+        entry.error = describeAdError(err);
+        entry.failedAt = 'creative';
+        report.ads.push(entry);
+        continue;
+      }
+
+      try {
         const ad = await graph.post(`${act}/ads`, {
           token,
           body: {
             name: `[Testbed] ${format.label}`,
             adset_id: adset.id,
-            creative: { creative_id: creative.id },
+            creative: { creative_id: entry.creativeId },
             status: 'PAUSED',
           },
         });
-        report.ads.push({ format: format.key, label: format.label, ok: true, creativeId: creative.id, adId: ad.id });
+        entry.ad = true;
+        entry.adId = ad.id;
       } catch (err) {
-        report.ads.push({
-          format: format.key,
-          label: format.label,
-          ok: false,
-          error: err.error?.message || err.message,
-          code: err.error?.code,
-          subcode: err.error?.error_subcode,
-        });
+        entry.error = describeAdError(err);
+        entry.failedAt = 'ad';
       }
+
+      entry.ok = entry.creative && entry.ad;
+      report.ads.push(entry);
     }
 
     // ------------------------------------------------------------- video ----
@@ -344,10 +357,19 @@ router.post('/showcase', async (req, res, next) => {
     }
 
     report.summary = {
+      creatives: report.ads.filter((a) => a.creative).length,
       created: report.ads.filter((a) => a.ok).length,
       failed: report.ads.filter((a) => !a.ok).length,
       status: 'ALL PAUSED - nothing can deliver or spend',
     };
+
+    // Meta refuses ad creation on an account with no funding source, but only
+    // at the final step - campaign, ad set and creatives all succeed first.
+    if (report.ads.some((a) => a.error?.subcode === 1359188)) {
+      report.warnings.push(
+        'Ads could not be created: this ad account has no payment method. Campaign, ad set and creatives were still built, so everything except the final attach step is verified. Add a payment method in Meta Billing, then POST /api/ads/showcase again.'
+      );
+    }
 
     addEvent({
       channel: 'ads',
@@ -376,3 +398,22 @@ router.post('/subscribe', async (req, res, next) => {
     next(err);
   }
 });
+
+// Meta's generic "Invalid parameter" is useless on its own; the real reason
+// lives in error_user_title / error_user_msg and the blamed field spec.
+function describeAdError(err) {
+  const e = err.error || {};
+  let blamedFields;
+  try {
+    blamedFields = JSON.parse(e.error_data || '{}').blame_field_specs?.flat();
+  } catch {
+    blamedFields = undefined;
+  }
+  return {
+    message: e.error_user_title || e.message || err.message,
+    detail: e.error_user_msg,
+    code: e.code,
+    subcode: e.error_subcode,
+    blamedFields,
+  };
+}
