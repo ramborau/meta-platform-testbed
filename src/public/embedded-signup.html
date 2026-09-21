@@ -82,7 +82,13 @@ window.addEventListener('message', (event) => {
   }
 });
 
-async function fbLoginCallback(response) {
+// The SDK rejects async functions passed to FB.login, so keep this plain and
+// delegate the awaiting work to a helper.
+function fbLoginCallback(response) {
+  handleLoginResponse(response);
+}
+
+async function handleLoginResponse(response) {
   log('login response:', response);
   const code = response?.authResponse?.code;
   if (!code) {

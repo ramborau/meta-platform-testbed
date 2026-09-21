@@ -181,5 +181,27 @@ r = await fetch(B + '/api/connect/rewire', { method: 'POST' });
 j = await r.json();
 ok('rewire with nothing connected is a clean no-op', r.status === 200 && j.summary?.subscribed === 0, JSON.stringify(j.summary));
 
+console.log('\n-- facebook sdk contract --');
+// The SDK type-checks the FB.login callback and throws
+// "Expression is of type asyncfunction, not function" if it is async.
+for (const [page, label] of [['/connect', 'connect'], ['/embedded-signup', 'embedded-signup']]) {
+  const html = await (await fetch(B + page)).text();
+  const cbName = (html.match(/FB\.login\(\s*([A-Za-z_$][\w$]*)/) || [])[1];
+  ok(`${label}: FB.login gets a named callback`, Boolean(cbName), cbName || 'none found');
+  if (cbName) {
+    const isAsync = new RegExp(`async\\s+function\\s+${cbName}\\b`).test(html);
+    const isPlain = new RegExp(`(^|[^c])\\bfunction\\s+${cbName}\\b`, 'm').test(html);
+    ok(`${label}: callback "${cbName}" is NOT async`, !isAsync);
+    ok(`${label}: callback "${cbName}" is declared`, isPlain);
+  }
+  // Inline scripts must parse; a syntax error silently disables the whole page.
+  const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  let parsed = true;
+  for (const b of blocks) {
+    try { new (await import('node:vm')).Script(b); } catch { parsed = false; }
+  }
+  ok(`${label}: inline scripts parse`, parsed);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

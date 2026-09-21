@@ -169,7 +169,14 @@ window.addEventListener('message', (event) => {
   fetch('/api/connect/session', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(data) }).catch(()=>{});
 });
 
-async function fbLoginCallback(response) {
+// The SDK type-checks this argument and rejects an async function outright
+// ("Expression is of type asyncfunction, not function"), so the callback has
+// to be a plain function that hands off to the async worker.
+function fbLoginCallback(response) {
+  handleLoginResponse(response);
+}
+
+async function handleLoginResponse(response) {
   const code = response?.authResponse?.code;
   if (!code) {
     addStep('No authorization code returned', 'bad', 'The dialog was closed, or the configuration is not set to System-user access token with response_type=code.');
