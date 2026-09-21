@@ -15,10 +15,10 @@ loadState('lastReport').then((r) => { if (r && !lastReport) lastReport = r; }).c
 // One authorization code from Embedded Signup v4 in, a fully wired integration out.
 router.post('/exchange', async (req, res, next) => {
   try {
-    const { code, sessionInfo, autoRegister = false, registerPin } = req.body || {};
+    const { code, sessionInfo, autoRegister = false, registerPin, include } = req.body || {};
     if (!code) return res.status(400).json({ error: 'code is required' });
 
-    const report = await onboardFromCode(code, { sessionInfo: sessionInfo || {}, autoRegister, registerPin });
+    const report = await onboardFromCode(code, { sessionInfo: sessionInfo || {}, autoRegister, registerPin, include });
     lastReport = report;
     saveState('lastReport', report).catch(() => {});
     res.json(report);

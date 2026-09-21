@@ -31,7 +31,7 @@ const PAGE_FIELDS = [
 
 const IG_FIELDS = ['messages', 'messaging_postbacks', 'messaging_referral', 'messaging_seen', 'comments', 'live_comments', 'mentions'].join(',');
 
-export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = false, registerPin } = {}) {
+export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = false, registerPin, include } = {}) {
   if (!config.appId || !config.appSecret) {
     throw new Error('META_APP_ID and META_APP_SECRET must be set on the server before onboarding.');
   }
@@ -43,6 +43,7 @@ export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = f
     sessionInfo,
     autoRegister,
     registerPin,
+    include,
     tokenType: tokenRes.token_type,
     expiresIn: tokenRes.expires_in ?? 'never',
     source: 'embedded-signup-v4',
@@ -53,10 +54,25 @@ export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = f
 // Signup is the normal path, but a token pasted from Graph API Explorer or
 // recovered elsewhere restores exactly the same state - which matters, because
 // a lost token cannot be re-fetched from Meta without another token.
+const ALL_ASSET_TYPES = ['whatsapp', 'pages', 'instagram', 'adAccounts', 'pixels'];
+
 export async function onboardWithToken(
   token,
-  { sessionInfo = {}, autoRegister = false, registerPin, tokenType, expiresIn = 'unknown', source = 'manual-token' } = {}
+  {
+    sessionInfo = {},
+    autoRegister = false,
+    registerPin,
+    tokenType,
+    expiresIn = 'unknown',
+    source = 'manual-token',
+    include,
+  } = {}
 ) {
+  // Which asset types to actually keep and wire. The login dialog still asks
+  // for whatever the configuration declares - that is fixed at configuration
+  // time and cannot be narrowed per request - so this controls what we store
+  // and subscribe, not what the customer is asked to grant.
+  const want = new Set(Array.isArray(include) && include.length ? include : ALL_ASSET_TYPES);
   const report = {
     startedAt: new Date().toISOString(),
     steps: [],
@@ -153,9 +169,30 @@ export async function onboardWithToken(
       adAccounts: adAccountIds.size,
     });
 
-    const pixels = await graph.get(`${businessId}/owned_pixels`, { token, query: { fields: 'id,name', limit: 50 } }).catch(() => null);
-    report.assets.pixels = (pixels?.data || []).map((p) => ({ id: p.id, name: p.name }));
+    if (want.has('pixels')) {
+      const pixels = await graph
+        .get(`${businessId}/owned_pixels`, { token, query: { fields: 'id,name', limit: 50 } })
+        .catch(() => null);
+      report.assets.pixels = (pixels?.data || []).map((p) => ({ id: p.id, name: p.name }));
+    }
   }
+
+  // Instagram messaging is delivered through its linked Page, so asking for
+  // Instagram without Pages cannot work. Pull Pages back in rather than
+  // silently returning an Instagram account that can never receive anything.
+  if (want.has('instagram') && !want.has('pages')) {
+    want.add('pages');
+    report.warnings.push('Pages were included automatically: Instagram webhooks and sends both go through the linked Page.');
+  }
+
+  // Drop whatever was not selected before any hydration or wiring happens.
+  if (!want.has('whatsapp')) wabaIds.clear();
+  if (!want.has('pages')) pageIds.clear();
+  if (!want.has('adAccounts')) adAccountIds.clear();
+  if (!want.has('instagram')) igIds.clear();
+
+  report.requested = [...want];
+  step('Applied asset selection', true, { requested: [...want] });
 
   // ------------------------------------------------- 5. hydrate + wire ------
 
@@ -218,7 +255,7 @@ export async function onboardWithToken(
       graph.post(`${info.id}/subscribed_apps`, { token: pageToken, form: { subscribed_fields: PAGE_FIELDS } })
     );
 
-    if (info.instagram_business_account) {
+    if (info.instagram_business_account && want.has('instagram')) {
       const ig = info.instagram_business_account;
       instagram.push({ ...ig, pageId: info.id, pageName: info.name, access_token: pageToken });
       report.assets.instagram.push({ id: ig.id, username: ig.username, name: ig.name, pageId: info.id, pageName: info.name });

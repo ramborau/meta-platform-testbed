@@ -19,6 +19,12 @@
     .chan .ico { font-size: 25px; line-height: 1; }
     .chan .nm { font-size: 12px; color: var(--muted); font-weight: 560; }
     .chan .st { font-size: 10.5px; color: var(--muted); }
+    .chan { cursor: pointer; user-select: none; }
+    .chan.sel { border-color: var(--accent); opacity: 1; }
+    .chan.sel .st { color: var(--accent); }
+    .chan.off { opacity: .32; border-color: var(--border); }
+    .chan.off .st { color: var(--muted); }
+    .chan.locked { cursor: default; }
     .chan.pending { opacity: .45; }
     .chan.working { border-color: var(--accent); animation: pulse 1.3s ease-in-out infinite; }
     .chan.done { border-color: var(--green); }
@@ -67,12 +73,20 @@
     <p>One authorization. Embedded Signup v4 collects every asset in a single dialog, then this server subscribes your app to all of them so webhooks start flowing immediately.</p>
   </div>
 
+  <p style="text-align:center;color:var(--muted);font-size:12.5px;margin:0 0 4px">
+    Tap to choose which assets to keep and wire up
+  </p>
   <div class="channels" id="channels">
-    <div class="chan pending" data-k="whatsapp"><span class="ico">💬</span><span class="nm">WhatsApp</span><span class="st">waiting</span></div>
-    <div class="chan pending" data-k="instagram"><span class="ico">📸</span><span class="nm">Instagram</span><span class="st">waiting</span></div>
-    <div class="chan pending" data-k="pages"><span class="ico">👍</span><span class="nm">Facebook</span><span class="st">waiting</span></div>
-    <div class="chan pending" data-k="adAccounts"><span class="ico">📊</span><span class="nm">Ads</span><span class="st">waiting</span></div>
+    <div class="chan sel" data-k="whatsapp"><span class="ico">💬</span><span class="nm">WhatsApp</span><span class="st">selected</span></div>
+    <div class="chan sel" data-k="instagram"><span class="ico">📸</span><span class="nm">Instagram</span><span class="st">selected</span></div>
+    <div class="chan sel" data-k="pages"><span class="ico">👍</span><span class="nm">Facebook</span><span class="st">selected</span></div>
+    <div class="chan sel" data-k="adAccounts"><span class="ico">📊</span><span class="nm">Ads</span><span class="st">selected</span></div>
+    <div class="chan sel" data-k="pixels"><span class="ico">🎯</span><span class="nm">Pixels</span><span class="st">selected</span></div>
   </div>
+  <p style="text-align:center;color:var(--muted);font-size:11px;margin:-14px 0 18px">
+    The login dialog still asks for whatever the configuration declares — that is fixed when the
+    configuration is created. This controls what gets stored and subscribed.
+  </p>
 
   <div id="preflight" style="max-width:680px;margin:0 auto 18px"></div>
 
@@ -129,6 +143,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let CONFIG = {};
+let CONFIG_READY = false;
 let sessionInfo = {};
 
 function toast(m) { const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2300); }
@@ -136,9 +151,35 @@ function toast(m) { const t=$('toast'); t.textContent=m; t.classList.add('show')
 function setChannel(key, state, label) {
   const n = document.querySelector(`.chan[data-k="${key}"]`);
   if (!n) return;
-  n.className = `chan ${state}`;
+  n.className = `chan locked ${state}`;
   n.querySelector('.st').textContent = label;
 }
+
+// --- asset selection -------------------------------------------------------
+const selected = new Set(['whatsapp', 'instagram', 'pages', 'adAccounts', 'pixels']);
+
+function paintSelection() {
+  for (const n of document.querySelectorAll('.chan')) {
+    if (n.classList.contains('locked')) continue;
+    const on = selected.has(n.dataset.k);
+    n.className = `chan ${on ? 'sel' : 'off'}`;
+    n.querySelector('.st').textContent = on ? 'selected' : 'skip';
+  }
+  $('launch').disabled = selected.size === 0 || !CONFIG_READY;
+}
+
+document.querySelectorAll('.chan').forEach((n) => {
+  n.addEventListener('click', () => {
+    if (n.classList.contains('locked')) return;
+    const k = n.dataset.k;
+    selected.has(k) ? selected.delete(k) : selected.add(k);
+    // Instagram cannot work without its linked Page, so keep them consistent
+    // here rather than surprising the user with it after the grant.
+    if (k === 'instagram' && selected.has('instagram')) selected.add('pages');
+    if (k === 'pages' && !selected.has('pages')) selected.delete('instagram');
+    paintSelection();
+  });
+});
 
 function addStep(text, state = 'ok', detail) {
   const n = document.createElement('div');
@@ -180,26 +221,26 @@ async function handleLoginResponse(response) {
   const code = response?.authResponse?.code;
   if (!code) {
     addStep('No authorization code returned', 'bad', 'The dialog was closed, or the configuration is not set to System-user access token with response_type=code.');
-    ['whatsapp','instagram','pages','adAccounts'].forEach(k => setChannel(k, 'fail', 'not connected'));
+    [...selected].forEach(k => setChannel(k, 'fail', 'not connected'));
     return;
   }
 
   addStep('Authorization code received', 'ok');
-  ['whatsapp','instagram','pages','adAccounts'].forEach(k => setChannel(k, 'working', 'wiring…'));
+  [...selected].forEach(k => setChannel(k, 'working', 'wiring…'));
   const pending = addStep('Exchanging code and subscribing every asset…', 'pending');
 
   try {
     const res = await fetch('/api/connect/exchange', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code, sessionInfo }),
+      body: JSON.stringify({ code, sessionInfo, include: [...selected] }),
     });
     const report = await res.json();
     pending.remove();
 
     if (!res.ok) {
       addStep(report.error || 'Exchange failed', 'bad', report.hint || JSON.stringify(report.graphError || {}));
-      ['whatsapp','instagram','pages','adAccounts'].forEach(k => setChannel(k, 'fail', 'failed'));
+      [...selected].forEach(k => setChannel(k, 'fail', 'failed'));
       return;
     }
     renderReport(report);
@@ -219,9 +260,12 @@ function renderReport(report) {
     instagram: report.summary?.instagram || 0,
     pages: report.summary?.pages || 0,
     adAccounts: report.summary?.adAccounts || 0,
+    pixels: report.summary?.pixels || 0,
   };
-  const labels = { whatsapp:'WABA', instagram:'account', pages:'Page', adAccounts:'ad account' };
+  const labels = { whatsapp:'WABA', instagram:'account', pages:'Page', adAccounts:'ad account', pixels:'pixel' };
+  const requested = new Set(report.requested || Object.keys(counts));
   for (const [k, n] of Object.entries(counts)) {
+    if (!requested.has(k)) { setChannel(k, 'off', 'skipped'); continue; }
     setChannel(k, n > 0 ? 'done' : 'fail', n > 0 ? `${n} ${labels[k]}${n>1?'s':''}` : 'none granted');
   }
 
@@ -281,6 +325,10 @@ function renderReport(report) {
 function launch() {
   $('progress').innerHTML = '';
   $('report-card').style.display = 'none';
+  // Tiles lock while a run is in progress; unlock here so a second attempt
+  // starts from an editable selection rather than the previous result.
+  document.querySelectorAll('.chan').forEach((n) => n.classList.remove('locked'));
+  paintSelection();
   addStep('Opening the Meta login dialog…', 'pending');
   FB.login(fbLoginCallback, {
     config_id: CONFIG.configId,
@@ -332,7 +380,8 @@ function launch() {
 
   window.fbAsyncInit = function () {
     FB.init({ appId: CONFIG.appId, cookie: true, xfbml: true, version: CONFIG.graphVersion });
-    $('launch').disabled = false;
+    CONFIG_READY = true;
+    paintSelection();
   };
   const s = document.createElement('script');
   s.src = 'https://connect.facebook.net/en_US/sdk.js';
