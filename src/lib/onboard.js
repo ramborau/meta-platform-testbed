@@ -66,6 +66,7 @@ export async function onboardWithToken(
     expiresIn = 'unknown',
     source = 'manual-token',
     include,
+    discoverAll = false,
   } = {}
 ) {
   // Which asset types to actually keep and wire. The login dialog still asks
@@ -149,8 +150,11 @@ export async function onboardWithToken(
 
   if (sessionInfo.waba_id) wabaIds.add(String(sessionInfo.waba_id));
 
-  // Business edges fill in anything granular_scopes did not enumerate.
-  if (businessId) {
+  // granular_scopes is what the customer actually ticked in the dialog. The
+  // business owned_*/client_* edges list everything the business owns, which is
+  // a superset - enumerating them silently adopts assets that were never
+  // granted through this flow. Off by default; pass discoverAll to opt in.
+  if (businessId && discoverAll) {
     const edges = [
       ['owned_whatsapp_business_accounts', wabaIds],
       ['client_whatsapp_business_accounts', wabaIds],

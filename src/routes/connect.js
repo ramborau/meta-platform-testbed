@@ -1,7 +1,7 @@
 import express from 'express';
 import { config } from '../config.js';
 import { onboardFromCode, onboardWithToken, rewireExisting, PAGE_FIELDS, IG_FIELDS } from '../lib/onboard.js';
-import { addEvent, getConnections } from '../lib/store.js';
+import { addEvent, getConnections, resetConnections } from '../lib/store.js';
 import { saveState, loadState } from '../lib/persist.js';
 
 export const router = express.Router();
@@ -50,6 +50,22 @@ router.post('/adopt-token', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// POST /api/connect/reset - drop everything stored, immediately.
+// Clears the token, every asset list and the last report, so the next flow
+// starts from nothing rather than inheriting a previous business's assets.
+router.post('/reset', async (req, res) => {
+  const had = resetConnections();
+  lastReport = null;
+  await saveState('lastReport', null).catch(() => {});
+  addEvent({
+    channel: 'system',
+    kind: 'connections.reset',
+    summary: `Flushed stored connection (${had.whatsapp} WABA, ${had.pages} Pages, ${had.instagram} IG, ${had.adAccounts} ad accounts)`,
+    payload: had,
+  });
+  res.json({ ok: true, cleared: had, connections: getConnections() });
 });
 
 // POST /api/connect/rewire - re-subscribe everything already connected.
