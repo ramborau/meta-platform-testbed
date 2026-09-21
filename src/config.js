@@ -25,6 +25,10 @@ export const config = {
   whatsapp: {
     // Embedded Signup configuration ID from App Dashboard > Facebook Login for Business > Configurations
     configId: process.env.WA_EMBEDDED_CONFIG_ID || '',
+    // A second configuration using the General login variation, granting Pages,
+    // ad accounts, Instagram and pixels but no WhatsApp. Login variation cannot
+    // be changed after a configuration is created, hence a separate one.
+    adsOnlyConfigId: process.env.ADS_ONLY_CONFIG_ID || '2132461897666197',
     // Optional: a directly-pasted token/phone for quick send tests without Embedded Signup
     token: process.env.WA_ACCESS_TOKEN || '',
     phoneNumberId: process.env.WA_PHONE_NUMBER_ID || '',

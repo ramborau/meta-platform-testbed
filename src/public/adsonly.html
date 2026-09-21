@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect Ads &amp; Pages — Meta Testbed</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .hero { text-align: center; padding: 34px 20px 26px; }
+    .hero h1 { font-size: 27px; margin: 0 0 10px; font-weight: 660; }
+    .hero p { color: var(--muted); max-width: 580px; margin: 0 auto; font-size: 14px; }
+    .channels { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 26px 0; }
+    .chan {
+      display: flex; flex-direction: column; align-items: center; gap: 7px;
+      background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+      padding: 15px 20px; min-width: 116px; transition: all .25s;
+    }
+    .chan .ico { font-size: 25px; line-height: 1; }
+    .chan .nm { font-size: 12px; color: var(--muted); font-weight: 560; }
+    .chan .st { font-size: 10.5px; color: var(--muted); }
+    .chan.pending { opacity: .45; }
+    .chan.working { border-color: var(--accent); animation: pulse 1.3s ease-in-out infinite; }
+    .chan.done { border-color: var(--green); } .chan.done .st { color: var(--green); }
+    .chan.fail { border-color: var(--red); }  .chan.fail .st { color: var(--red); }
+    .chan.na { opacity: .3; }
+    @keyframes pulse { 0%,100% { opacity:.55 } 50% { opacity:1 } }
+    .cta {
+      display: block; margin: 0 auto; background: #1877f2; color: #fff; border: 0;
+      border-radius: 10px; padding: 15px 34px; font-size: 16px; font-weight: 640;
+      cursor: pointer; font-family: inherit; min-width: 290px;
+    }
+    .cta:hover:not(:disabled) { filter: brightness(1.09); }
+    .cta:disabled { opacity: .45; cursor: not-allowed; }
+    .progress { max-width: 620px; margin: 22px auto 0; }
+    .pstep { display: flex; gap: 11px; align-items: flex-start; padding: 8px 0; font-size: 13px; }
+    .pstep .ic { flex: 0 0 18px; text-align: center; }
+    .pstep .tx { flex: 1; }
+    .pstep .dt { color: var(--muted); font-size: 11.5px; margin-top: 2px; font-family: var(--mono); }
+    .pstep.bad .tx { color: var(--red); }
+    .asset-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 11px; margin-top: 12px; }
+    .asset { background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 11px 13px; }
+    .asset.wired { border-color: rgba(46,204,143,.4); }
+    .asset.unwired { border-color: rgba(255,92,114,.4); }
+    .asset .t { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+    .asset .s { color: var(--muted); font-size: 11.5px; margin-top: 4px; font-family: var(--mono); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot live"></span> Connect Ads &amp; Pages</div>
+  <div class="header-meta">
+    <a href="/connect" style="color:var(--accent);text-decoration:none">WhatsApp flow</a>
+    <a href="/" style="color:var(--accent);text-decoration:none">← Console</a>
+  </div>
+</header>
+
+<main style="max-width:940px">
+
+  <div class="hero">
+    <h1>Connect Pages, Ads and Instagram</h1>
+    <p>
+      The General login variation. Grants Pages, ad accounts, Instagram accounts and pixels —
+      no WhatsApp assets are requested and no WhatsApp screen appears in the flow.
+    </p>
+  </div>
+
+  <div class="channels" id="channels">
+    <div class="chan pending" data-k="pages"><span class="ico">👍</span><span class="nm">Pages</span><span class="st">waiting</span></div>
+    <div class="chan pending" data-k="instagram"><span class="ico">📸</span><span class="nm">Instagram</span><span class="st">waiting</span></div>
+    <div class="chan pending" data-k="adAccounts"><span class="ico">📊</span><span class="nm">Ad accounts</span><span class="st">waiting</span></div>
+    <div class="chan pending" data-k="pixels"><span class="ico">🎯</span><span class="nm">Pixels</span><span class="st">waiting</span></div>
+    <div class="chan na" data-k="whatsapp"><span class="ico">💬</span><span class="nm">WhatsApp</span><span class="st">not requested</span></div>
+  </div>
+
+  <div id="preflight" style="max-width:680px;margin:0 auto 18px"></div>
+
+  <button class="cta" id="launch" disabled>Continue with Facebook</button>
+  <p style="text-align:center;color:var(--muted);font-size:11.5px;margin-top:11px">
+    You will pick a business portfolio, then select which Pages, ad accounts and Instagram accounts to grant.
+  </p>
+
+  <div class="progress" id="progress"></div>
+
+  <div class="card" id="report-card" style="margin-top:22px;display:none">
+    <h2>Connection report</h2>
+    <p class="hint" id="report-summary"></p>
+    <div id="report-assets"></div>
+    <div id="report-warnings"></div>
+    <div class="row">
+      <button class="btn ghost" id="btn-rewire">Re-subscribe everything</button>
+      <a href="/"><button class="btn">Open the console →</button></a>
+    </div>
+    <pre class="out" id="report-raw" style="display:none"></pre>
+    <div class="row tight"><button class="btn ghost sm" id="btn-raw">Show raw report</button></div>
+  </div>
+
+  <div class="card" style="margin-top:22px">
+    <h2>How this differs from the WhatsApp flow</h2>
+    <p class="hint">Login variation cannot be changed once a configuration exists, which is why this is a second configuration rather than a setting.</p>
+    <ul class="checklist">
+      <li><span class="mark">•</span><div><strong>Login variation: General</strong> — not WhatsApp Embedded Signup.</div></li>
+      <li><span class="mark">•</span><div><strong>No <code>extras</code> sent to FB.login.</strong> <code>setup</code>, <code>featureType</code> and <code>sessionInfoVersion</code> are Embedded Signup only. Sending them against a General configuration is what makes a WhatsApp screen appear in a flow that should not have one.</div></li>
+      <li><span class="mark">•</span><div><strong>Assets:</strong> Pages, ad accounts, Instagram accounts, pixels. WhatsApp accounts are not requested, so nothing WhatsApp-related is granted.</div></li>
+      <li><span class="mark">•</span><div><strong>Same server path.</strong> The code exchange, <code>debug_token</code> asset discovery and subscription wiring are identical — WhatsApp discovery simply returns nothing.</div></li>
+    </ul>
+  </div>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let CONFIG = {};
+let CONFIG_ID = null;
+
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2300);}
+
+function setChannel(key, state, label) {
+  const n = document.querySelector(`.chan[data-k="${key}"]`);
+  if (!n) return;
+  n.className = `chan ${state}`;
+  n.querySelector('.st').textContent = label;
+}
+
+function addStep(text, state = 'ok', detail) {
+  const n = document.createElement('div');
+  n.className = `pstep ${state === 'bad' ? 'bad' : ''}`;
+  const icon = state === 'ok' ? '✅' : state === 'bad' ? '❌' : state === 'warn' ? '⚠️' : '⏳';
+  n.innerHTML = `<div class="ic">${icon}</div><div class="tx">${esc(text)}${detail ? `<div class="dt">${esc(detail)}</div>` : ''}</div>`;
+  $('progress').appendChild(n);
+  n.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  return n;
+}
+
+// The SDK type-checks this argument and rejects an async function, so keep it
+// plain and delegate the awaiting work.
+function fbLoginCallback(response) { handleLoginResponse(response); }
+
+async function handleLoginResponse(response) {
+  const code = response?.authResponse?.code;
+  if (!code) {
+    addStep('No authorization code returned', 'bad', 'Dialog closed, or the configuration is not set to System-user access token.');
+    ['pages','instagram','adAccounts','pixels'].forEach(k => setChannel(k, 'fail', 'not connected'));
+    return;
+  }
+  addStep('Authorization code received', 'ok');
+  ['pages','instagram','adAccounts','pixels'].forEach(k => setChannel(k, 'working', 'wiring…'));
+  const pending = addStep('Exchanging code and subscribing assets…', 'pending');
+
+  try {
+    const res = await fetch('/api/connect/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const report = await res.json();
+    pending.remove();
+    if (!res.ok) {
+      addStep(report.error || 'Exchange failed', 'bad', JSON.stringify(report.graphError || {}).slice(0, 200));
+      ['pages','instagram','adAccounts','pixels'].forEach(k => setChannel(k, 'fail', 'failed'));
+      return;
+    }
+    renderReport(report);
+  } catch (err) {
+    pending.remove();
+    addStep(`Request failed: ${err.message}`, 'bad');
+  }
+}
+
+function renderReport(report) {
+  for (const s of report.steps || []) {
+    addStep(s.name, s.ok ? 'ok' : 'warn', typeof s.detail === 'string' ? s.detail : s.detail ? JSON.stringify(s.detail) : '');
+  }
+
+  const counts = {
+    pages: report.summary?.pages || 0,
+    instagram: report.summary?.instagram || 0,
+    adAccounts: report.summary?.adAccounts || 0,
+    pixels: report.summary?.pixels || 0,
+  };
+  const labels = { pages:'Page', instagram:'account', adAccounts:'ad account', pixels:'pixel' };
+  for (const [k, n] of Object.entries(counts)) {
+    setChannel(k, n > 0 ? 'done' : 'fail', n > 0 ? `${n} ${labels[k]}${n>1?'s':''}` : 'none granted');
+  }
+  if ((report.summary?.whatsapp || 0) > 0) {
+    setChannel('whatsapp', 'done', `${report.summary.whatsapp} WABA`);
+    addStep('WhatsApp assets were granted', 'warn', 'Unexpected for a General configuration - check the configuration assets.');
+  }
+
+  $('report-card').style.display = 'block';
+  $('report-summary').innerHTML =
+    `<strong>${report.summary?.subscribed || 0}</strong> subscriptions succeeded` +
+    (report.summary?.failed ? `, <span style="color:var(--red)"><strong>${report.summary.failed}</strong> failed</span>` : '') +
+    `. Business portfolio <code>${esc(report.businessId || 'unknown')}</code>, token expires <code>${esc(report.expiresIn)}</code>.`;
+
+  const wiringFor = (id) => (report.wiring || []).find((w) => String(w.id) === String(id));
+  const box = $('report-assets');
+  box.innerHTML = '';
+  const groups = [
+    ['Facebook Pages', report.assets?.pages || [], (a) => ({ id: a.id, title: a.name, sub: a.category || a.id, pill: 'messenger' })],
+    ['Instagram accounts', report.assets?.instagram || [], (a) => ({ id: a.id, title: '@' + (a.username || a.id), sub: a.pageName ? `via ${a.pageName}` : 'no linked Page', pill: 'instagram' })],
+    ['Ad accounts', report.assets?.adAccounts || [], (a) => ({ id: a.id, title: a.name, sub: `${a.currency || ''} · ${a.id}`, pill: 'ads' })],
+    ['Pixels', report.assets?.pixels || [], (a) => ({ id: a.id, title: a.name || a.id, sub: a.id, pill: 'ads' })],
+  ];
+  for (const [title, items, map] of groups) {
+    if (!items.length) continue;
+    const h = document.createElement('h3'); h.textContent = `${title} (${items.length})`; box.appendChild(h);
+    const grid = document.createElement('div'); grid.className = 'asset-grid';
+    for (const item of items) {
+      const m = map(item);
+      const w = wiringFor(m.id);
+      const state = w ? (w.ok || w.optional ? 'wired' : 'unwired') : '';
+      const badge = !w ? '<span class="pill">no subscription</span>'
+        : w.ok ? '<span class="pill ok">subscribed</span>'
+        : w.optional ? '<span class="pill ok">live via Page</span>'
+        : `<span class="pill err">${esc(w.error || 'failed')}</span>`;
+      const d = document.createElement('div');
+      d.className = `asset ${state}`;
+      d.innerHTML = `<div class="t"><span class="pill ${m.pill}">${esc(m.pill)}</span>${esc(m.title)}</div>
+        <div class="s">${esc(m.sub)}</div><div style="margin-top:7px">${badge}</div>`;
+      grid.appendChild(d);
+    }
+    box.appendChild(grid);
+  }
+
+  const warn = $('report-warnings');
+  warn.innerHTML = (report.warnings || []).length
+    ? '<h3>Warnings</h3>' + report.warnings.map((w) => `<div class="rule" style="border-color:var(--amber)"><div class="rule-body">${esc(w)}</div></div>`).join('')
+    : '';
+  $('report-raw').textContent = JSON.stringify(report, null, 2);
+  addStep(`Done — ${report.summary?.subscribed || 0} assets subscribed`, report.ok ? 'ok' : 'warn');
+}
+
+function launch() {
+  $('progress').innerHTML = '';
+  $('report-card').style.display = 'none';
+  addStep('Opening the Meta login dialog…', 'pending');
+  // No extras: this is the General login variation. setup / featureType /
+  // sessionInfoVersion belong to WhatsApp Embedded Signup only.
+  FB.login(fbLoginCallback, {
+    config_id: CONFIG_ID,
+    response_type: 'code',
+    override_default_response_type: true,
+  });
+}
+
+(async function init() {
+  CONFIG = await fetch('/api/connect/config').then((r) => r.json());
+  // ?config= overrides, so another configuration can be tried without a deploy.
+  CONFIG_ID = new URLSearchParams(location.search).get('config') || CONFIG.adsOnlyConfigId;
+
+  const problems = [];
+  if (!CONFIG.appId) problems.push('<code>META_APP_ID</code> is not set on the server.');
+  if (!CONFIG.hasAppSecret) problems.push('<code>META_APP_SECRET</code> is not set on the server.');
+  if (!CONFIG_ID) problems.push('No configuration ID. Set <code>ADS_ONLY_CONFIG_ID</code> or pass <code>?config=</code>.');
+
+  if (problems.length) {
+    $('preflight').innerHTML = `<div class="rule" style="border-color:var(--amber)">
+      <div class="rule-head"><span class="pill warn">not ready</span></div>
+      <div class="rule-body"><ul style="margin:6px 0 0;padding-left:18px;line-height:1.9">${problems.map(p=>`<li>${p}</li>`).join('')}</ul></div></div>`;
+    return;
+  }
+
+  $('preflight').innerHTML = `<div class="rule" style="border-color:var(--green)">
+    <div class="rule-head"><span class="pill ok">ready</span>
+    <span class="pill">App ${esc(CONFIG.appId)}</span>
+    <span class="pill ads">Config ${esc(CONFIG_ID)}</span>
+    <span class="pill">General variation</span></div></div>`;
+
+  window.fbAsyncInit = function () {
+    FB.init({ appId: CONFIG.appId, cookie: true, xfbml: true, version: CONFIG.graphVersion });
+    $('launch').disabled = false;
+  };
+  const s = document.createElement('script');
+  s.src = 'https://connect.facebook.net/en_US/sdk.js';
+  s.async = true; s.defer = true; s.crossOrigin = 'anonymous';
+  document.head.appendChild(s);
+})();
+
+$('launch').addEventListener('click', launch);
+$('btn-raw').addEventListener('click', () => {
+  const r = $('report-raw');
+  r.style.display = r.style.display === 'none' ? 'block' : 'none';
+});
+$('btn-rewire').addEventListener('click', async (e) => {
+  e.target.disabled = true;
+  try {
+    const rep = await fetch('/api/connect/rewire', { method: 'POST' }).then((r) => r.json());
+    toast(`${rep.summary?.subscribed || 0} re-subscribed, ${rep.summary?.failed || 0} failed`);
+  } finally { e.target.disabled = false; }
+});
+</script>
+</body>
+</html>

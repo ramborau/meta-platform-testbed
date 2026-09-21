@@ -158,6 +158,7 @@ app.get('/api/config', (req, res) => {
       privacyPolicy: `${config.publicUrl}/privacy`,
       termsOfService: `${config.publicUrl}/terms`,
       connectAll: `${config.publicUrl}/connect`,
+      adsOnly: `${config.publicUrl}/adsonly`,
       embeddedSignup: `${config.publicUrl}/embedded-signup`,
     },
     configured: {
@@ -174,6 +175,13 @@ app.get('/api/config', (req, res) => {
 // WhatsApp, Instagram, Pages and ad accounts, then automatic subscription wiring.
 app.get('/connect', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'connect.html'));
+});
+
+// The General login variation: Pages, ad accounts, Instagram and pixels, with
+// no WhatsApp assets requested. A separate configuration because the login
+// variation is fixed once a configuration is created.
+app.get('/adsonly', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'adsonly.html'));
 });
 
 // WhatsApp-only Embedded Signup, kept for testing that flow in isolation.

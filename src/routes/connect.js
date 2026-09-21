@@ -62,6 +62,28 @@ router.post('/rewire', async (req, res, next) => {
   }
 });
 
+// GET /api/connect/token - the raw tokens, unmasked, for use in curl.
+// Everything else in this service fingerprints tokens before returning them;
+// this endpoint deliberately does not.
+router.get('/token', (req, res) => {
+  const c = rawConnections();
+  res.json({
+    businessToken: c.user?.accessToken || null,
+    businessId: c.user?.businessId || null,
+    expiresAt: c.user?.expiresAt || null,
+    scopes: c.user?.scopes || [],
+    whatsapp: c.whatsapp.map((w) => ({
+      wabaId: w.waba_id,
+      phoneNumberId: w.phone_number_id,
+      numbers: (w.numbers || []).map((n) => n.display_phone_number),
+      accessToken: w.access_token || null,
+    })),
+    pages: c.pages.map((p) => ({ id: p.id, name: p.name, accessToken: p.access_token || null })),
+    instagram: c.instagram.map((i) => ({ id: i.id, username: i.username, pageId: i.pageId })),
+    adAccounts: c.adAccounts.map((a) => ({ id: a.account_id || a.id, name: a.name })),
+  });
+});
+
 // GET /api/connect/report - the last onboarding result.
 router.get('/report', (req, res) => {
   res.json({ report: lastReport, connections: getConnections() });
@@ -103,6 +125,7 @@ router.get('/config', (req, res) => {
     appId: config.appId || null,
     hasAppSecret: Boolean(config.appSecret),
     configId: config.whatsapp.configId || null,
+    adsOnlyConfigId: config.whatsapp.adsOnlyConfigId || null,
     graphVersion: config.graphVersion,
     publicUrl: config.publicUrl,
     allowedDomain: new URL(config.publicUrl).host,
