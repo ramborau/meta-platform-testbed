@@ -1,0 +1,346 @@
+import { config } from '../config.js';
+import { graph, exchangeEmbeddedSignupCode, debugToken } from './graph.js';
+import { addEvent, setConnection, rawConnections } from './store.js';
+
+// The "connect everything at once" engine.
+//
+// Embedded Signup v4 hands back ONE authorization code that can carry WhatsApp,
+// Pages, Instagram and ad account grants together. This module turns that single
+// code into a fully wired integration:
+//
+//   code -> business token -> discover every granted asset -> subscribe the app
+//   to each one -> report exactly what worked and what did not.
+//
+// Discovery runs two ways and merges the results, because neither is complete on
+// its own: debug_token's granular_scopes is the authoritative list of what the
+// customer actually ticked, while the business edges resolve names and metadata.
+
+const PAGE_FIELDS = [
+  'messages',
+  'messaging_postbacks',
+  'messaging_optins',
+  'messaging_referrals',
+  'messaging_handovers',
+  'message_reads',
+  'message_echoes',
+  'message_reactions',
+  'feed',
+  'leadgen',
+  'mention',
+].join(',');
+
+const IG_FIELDS = ['messages', 'messaging_postbacks', 'messaging_referral', 'messaging_seen', 'comments', 'live_comments', 'mentions'].join(',');
+
+export async function onboardFromCode(code, { sessionInfo = {}, autoRegister = false, registerPin } = {}) {
+  const report = {
+    startedAt: new Date().toISOString(),
+    steps: [],
+    assets: { whatsapp: [], pages: [], instagram: [], adAccounts: [], pixels: [] },
+    wiring: [],
+    warnings: [],
+  };
+
+  const step = (name, ok, detail) => {
+    report.steps.push({ name, ok, detail });
+    return ok;
+  };
+
+  // ---------------------------------------------------- 1. code -> token ----
+  if (!config.appId || !config.appSecret) {
+    throw new Error('META_APP_ID and META_APP_SECRET must be set on the server before onboarding.');
+  }
+
+  const tokenRes = await exchangeEmbeddedSignupCode(code);
+  const token = tokenRes.access_token;
+  if (!token) throw new Error('No access_token came back from the code exchange.');
+  step('Exchanged authorization code for a business token', true, {
+    tokenType: tokenRes.token_type,
+    expiresIn: tokenRes.expires_in ?? 'never',
+  });
+
+  report.tokenType = tokenRes.token_type;
+  report.expiresIn = tokenRes.expires_in ?? 'never';
+
+  // ------------------------------------------- 2. identify the client -------
+  // A business integration system user token knows which business portfolio it
+  // belongs to. User tokens do not, so this is allowed to fail softly.
+  let businessId = null;
+  const me = await graph.get('me', { token, query: { fields: 'id,name,client_business_id' } }).catch(() => null);
+  if (me?.client_business_id) {
+    businessId = me.client_business_id;
+    step('Resolved the client business portfolio', true, { businessId });
+  } else {
+    step('Resolved the client business portfolio', false, 'No client_business_id - this looks like a user token, not a business token. Asset discovery will fall back to granted scopes only.');
+    report.warnings.push('Token is not a business integration system user token. Check that the Facebook Login for Business configuration is set to System-user access token.');
+  }
+  report.businessId = businessId;
+
+  // ------------------------------- 3. what did the customer actually grant --
+  const debug = await debugToken(token).catch(() => null);
+  const scopes = debug?.data?.scopes || [];
+  const granular = debug?.data?.granular_scopes || [];
+  report.scopes = scopes;
+  report.granularScopes = granular;
+  step('Read granted permissions', true, { count: scopes.length, scopes });
+
+  const targetsFor = (...scopeNames) => {
+    const ids = new Set();
+    for (const g of granular) {
+      if (scopeNames.includes(g.scope)) for (const id of g.target_ids || []) ids.add(String(id));
+    }
+    return [...ids];
+  };
+
+  // --------------------------------------------- 4. discover every asset ----
+  const wabaIds = new Set(targetsFor('whatsapp_business_management', 'whatsapp_business_messaging'));
+  const pageIds = new Set(targetsFor('pages_show_list', 'pages_messaging', 'pages_manage_metadata', 'pages_manage_ads', 'pages_read_engagement'));
+  const adAccountIds = new Set(targetsFor('ads_management', 'ads_read'));
+  const igIds = new Set(targetsFor('instagram_basic', 'instagram_manage_messages', 'instagram_manage_comments'));
+
+  if (sessionInfo.waba_id) wabaIds.add(String(sessionInfo.waba_id));
+
+  // Business edges fill in anything granular_scopes did not enumerate.
+  if (businessId) {
+    const edges = [
+      ['owned_whatsapp_business_accounts', wabaIds],
+      ['client_whatsapp_business_accounts', wabaIds],
+      ['owned_pages', pageIds],
+      ['client_pages', pageIds],
+      ['owned_ad_accounts', adAccountIds],
+      ['client_ad_accounts', adAccountIds],
+    ];
+    for (const [edge, bucket] of edges) {
+      const res = await graph.get(`${businessId}/${edge}`, { token, query: { limit: 100 } }).catch(() => null);
+      for (const item of res?.data || []) bucket.add(String(item.account_id || item.id).replace(/^act_/, ''));
+    }
+    step('Enumerated assets on the business portfolio', true, {
+      wabas: wabaIds.size,
+      pages: pageIds.size,
+      adAccounts: adAccountIds.size,
+    });
+
+    const pixels = await graph.get(`${businessId}/owned_pixels`, { token, query: { fields: 'id,name', limit: 50 } }).catch(() => null);
+    report.assets.pixels = (pixels?.data || []).map((p) => ({ id: p.id, name: p.name }));
+  }
+
+  // ------------------------------------------------- 5. hydrate + wire ------
+
+  // WhatsApp: pull the numbers, then subscribe the app to the WABA.
+  for (const wabaId of wabaIds) {
+    const info = await graph.get(wabaId, { token, query: { fields: 'id,name,currency,timezone_id,account_review_status' } }).catch(() => null);
+    const numbers = await graph
+      .get(`${wabaId}/phone_numbers`, {
+        token,
+        query: { fields: 'id,display_phone_number,verified_name,quality_rating,code_verification_status,platform_type' },
+      })
+      .catch(() => null);
+
+    const record = {
+      waba_id: wabaId,
+      name: info?.name || wabaId,
+      review_status: info?.account_review_status,
+      access_token: token,
+      numbers: numbers?.data || [],
+      phone_number_id: sessionInfo.phone_number_id || numbers?.data?.[0]?.id,
+      connectedAt: new Date().toISOString(),
+    };
+    report.assets.whatsapp.push({ ...record, access_token: undefined });
+
+    await wire(report, 'whatsapp', wabaId, record.name, () =>
+      graph.post(`${wabaId}/subscribed_apps`, { token })
+    );
+
+    // Registering the number is what makes Cloud API sending work. It is opt-in
+    // because a wrong PIN locks the number out for a while.
+    if (autoRegister && record.phone_number_id) {
+      await wire(report, 'whatsapp-register', record.phone_number_id, record.numbers[0]?.display_phone_number || '', () =>
+        graph.post(`${record.phone_number_id}/register`, {
+          token,
+          body: { messaging_product: 'whatsapp', pin: registerPin || config.whatsapp.registerPin },
+        })
+      );
+    }
+
+    setConnection('whatsapp', [record, ...rawConnections().whatsapp.filter((w) => w.waba_id !== wabaId)]);
+  }
+
+  // Pages: grab a page token, find the linked IG account, subscribe to fields.
+  const pages = [];
+  const instagram = [];
+  for (const pid of pageIds) {
+    const info = await graph
+      .get(pid, { token, query: { fields: 'id,name,access_token,category,instagram_business_account{id,username,name,profile_picture_url,followers_count}' } })
+      .catch(() => null);
+    if (!info) {
+      report.warnings.push(`Could not read Page ${pid} - the token may not cover it.`);
+      continue;
+    }
+
+    const pageToken = info.access_token || token;
+    pages.push({ id: info.id, name: info.name, category: info.category, access_token: pageToken });
+    report.assets.pages.push({ id: info.id, name: info.name, category: info.category, hasPageToken: Boolean(info.access_token) });
+
+    await wire(report, 'page', info.id, info.name, () =>
+      graph.post(`${info.id}/subscribed_apps`, { token: pageToken, form: { subscribed_fields: PAGE_FIELDS } })
+    );
+
+    if (info.instagram_business_account) {
+      const ig = info.instagram_business_account;
+      instagram.push({ ...ig, pageId: info.id, pageName: info.name, access_token: pageToken });
+      report.assets.instagram.push({ id: ig.id, username: ig.username, name: ig.name, pageId: info.id, pageName: info.name });
+      igIds.delete(String(ig.id));
+
+      // Instagram messaging rides the Page subscription, but newer IG accounts
+      // also accept a direct subscription. Try it; a failure here is not fatal.
+      await wire(report, 'instagram', ig.id, ig.username || ig.id, () =>
+        graph.post(`${ig.id}/subscribed_apps`, { token: pageToken, form: { subscribed_fields: IG_FIELDS } })
+      , { optional: true });
+    }
+  }
+
+  // Any IG account granted without its Page showing up.
+  for (const igId of igIds) {
+    const info = await graph.get(igId, { token, query: { fields: 'id,username,name' } }).catch(() => null);
+    if (info) {
+      instagram.push({ ...info, access_token: token });
+      report.assets.instagram.push({ id: info.id, username: info.username, name: info.name, pageId: null });
+      report.warnings.push(`Instagram account @${info.username || igId} was granted but its linked Page was not. Instagram DM webhooks arrive through the Page, so grant the Page too.`);
+    }
+  }
+
+  if (pages.length) setConnection('pages', pages);
+  if (instagram.length) setConnection('instagram', instagram);
+
+  // Ad accounts.
+  const adAccounts = [];
+  for (const aid of adAccountIds) {
+    const info = await graph
+      .get(`act_${aid}`, { token, query: { fields: 'id,account_id,name,account_status,currency,timezone_name' } })
+      .catch(() => null);
+    if (!info) continue;
+    adAccounts.push(info);
+    report.assets.adAccounts.push({
+      id: info.account_id,
+      name: info.name,
+      currency: info.currency,
+      status: info.account_status,
+    });
+
+    await wire(report, 'ad_account', info.account_id, info.name, () =>
+      graph.post(`act_${info.account_id}/subscribed_apps`, { token, form: { app_id: config.appId } })
+    , { optional: true });
+  }
+  if (adAccounts.length) setConnection('adAccounts', adAccounts);
+
+  setConnection('user', {
+    id: me?.id,
+    name: me?.name || `Business ${businessId || 'client'}`,
+    accessToken: token,
+    businessId,
+    scopes,
+    source: 'embedded-signup-v4',
+    expiresAt: tokenRes.expires_in ? new Date(Date.now() + tokenRes.expires_in * 1000).toISOString() : 'never',
+    connectedAt: new Date().toISOString(),
+  });
+
+  // ------------------------------------------------------- 6. summarise ----
+  const wired = report.wiring.filter((w) => w.ok).length;
+  const failed = report.wiring.filter((w) => !w.ok && !w.optional).length;
+
+  report.summary = {
+    whatsapp: report.assets.whatsapp.length,
+    pages: report.assets.pages.length,
+    instagram: report.assets.instagram.length,
+    adAccounts: report.assets.adAccounts.length,
+    pixels: report.assets.pixels.length,
+    subscribed: wired,
+    failed,
+  };
+  report.finishedAt = new Date().toISOString();
+  report.ok = failed === 0 && (report.summary.whatsapp + report.summary.pages + report.summary.adAccounts) > 0;
+
+  if (!report.ok && report.summary.whatsapp + report.summary.pages + report.summary.adAccounts === 0) {
+    report.warnings.push('No assets were granted. The customer may have cancelled asset selection, or the login configuration does not request any assets.');
+  }
+
+  addEvent({
+    channel: 'system',
+    kind: 'connect.completed',
+    summary: `Connected ${report.summary.whatsapp} WABA · ${report.summary.pages} Pages · ${report.summary.instagram} IG · ${report.summary.adAccounts} ad accounts (${wired} subscriptions, ${failed} failed)`,
+    payload: report.summary,
+  });
+
+  return report;
+}
+
+// Run one wiring call and record the outcome instead of throwing. A single
+// failed subscription must not abandon the rest of the onboarding.
+async function wire(report, type, id, name, fn, { optional = false } = {}) {
+  try {
+    const result = await fn();
+    report.wiring.push({ type, id, name, ok: true, optional, result });
+    return true;
+  } catch (err) {
+    report.wiring.push({
+      type,
+      id,
+      name,
+      ok: false,
+      optional,
+      error: err.message,
+      code: err.error?.code,
+      hint: subscribeHint(err.error),
+    });
+    return false;
+  }
+}
+
+function subscribeHint(fbError) {
+  const code = fbError?.code;
+  if (code === 200 || code === 10) return 'The token lacks the permission for this asset, or the app needs Advanced Access via App Review.';
+  if (code === 100) return 'The asset ID was not visible to this token - it may not have been granted during the flow.';
+  if (code === 190) return 'Token invalid or expired.';
+  return undefined;
+}
+
+// Re-run every subscription against the assets already connected. Useful after
+// adding a webhook field in the App Dashboard, without redoing the whole flow.
+export async function rewireExisting() {
+  const conns = rawConnections();
+  const report = { steps: [], wiring: [], assets: { whatsapp: [], pages: [], instagram: [], adAccounts: [], pixels: [] }, warnings: [] };
+
+  for (const w of conns.whatsapp) {
+    await wire(report, 'whatsapp', w.waba_id, w.name || w.waba_id, () =>
+      graph.post(`${w.waba_id}/subscribed_apps`, { token: w.access_token })
+    );
+  }
+  for (const p of conns.pages) {
+    await wire(report, 'page', p.id, p.name, () =>
+      graph.post(`${p.id}/subscribed_apps`, { token: p.access_token, form: { subscribed_fields: PAGE_FIELDS } })
+    );
+  }
+  for (const a of conns.adAccounts) {
+    await wire(report, 'ad_account', a.account_id || a.id, a.name, () =>
+      graph.post(`act_${String(a.account_id || a.id).replace(/^act_/, '')}/subscribed_apps`, {
+        token: conns.user?.accessToken,
+        form: { app_id: config.appId },
+      })
+    , { optional: true });
+  }
+
+  const wired = report.wiring.filter((w) => w.ok).length;
+  const failed = report.wiring.filter((w) => !w.ok && !w.optional).length;
+  report.summary = { subscribed: wired, failed };
+  report.ok = failed === 0;
+
+  addEvent({
+    channel: 'system',
+    kind: 'connect.rewired',
+    summary: `Re-subscribed ${wired} assets (${failed} failed)`,
+    payload: report.summary,
+  });
+
+  return report;
+}
+
+export { PAGE_FIELDS, IG_FIELDS };

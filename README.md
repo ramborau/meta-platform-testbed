@@ -6,8 +6,46 @@ runs a keyword automation engine that replies on any channel, and gives you a li
 
 Built for testing — to see what is what, with the raw payloads in front of you.
 
+## Connect everything at once — `/connect`
+
+**Embedded Signup v4** can onboard multiple products in a single dialog, so one authorization grants
+WhatsApp, Instagram, Facebook Pages *and* ad accounts together. `/connect` runs that flow and then wires
+everything up automatically:
+
+```
+authorization code
+  → business integration system user token
+  → GET /me?fields=client_business_id          (which business is this?)
+  → GET /debug_token → granular_scopes         (exactly which assets were granted)
+  → business owned_*/client_* edges            (names and metadata)
+  → POST /{waba}/subscribed_apps               ┐
+  → POST /{page}/subscribed_apps               ├ webhooks start flowing
+  → POST /act_{id}/subscribed_apps             ┘
+  → connection report: every asset, subscribed or not, with the reason
+```
+
+Build the login configuration with these products ticked — that is what makes one dialog cover all four channels:
+
+| Product | Assets it pulls in |
+|---|---|
+| Cloud API | WhatsApp Business accounts |
+| Click to WhatsApp Ads (CTWA) | WABA + Pages + Ad accounts |
+| Click to Messenger Ads (CTM) | Pages + Ad accounts |
+| Click to Instagram Ads (CTD) | Pages + Ad accounts + **Instagram accounts** |
+| Marketing Messages (WhatsApp) | WhatsApp Business accounts |
+
+Selecting products is what puts the configuration on v4. **Embedded Signup v2 is deprecated on 15 October 2026.**
+
+The ad products only request ads permissions, so add these by hand or DM automation will not work:
+`pages_messaging`, `pages_manage_metadata`, `pages_manage_engagement`, `instagram_basic`,
+`instagram_manage_messages`, `instagram_manage_comments`, `business_management`, `leads_retrieval`.
+
+Also subscribe to the `account_update` field on `whatsapp_business_account` — Meta fires it the moment a
+customer completes the flow and it carries their business info.
+
 ## What it does
 
+- **One-shot onboarding** (`/connect`) across WhatsApp, Instagram, Pages and Ads, with automatic subscription wiring and a per-asset report
 - **Webhook receiver** for all four products, with `X-Hub-Signature-256` HMAC verification against the raw request body
 - **Normalizer** that flattens WhatsApp / Instagram / Page / Ad Account envelopes into one event shape
 - **Automation engine** — keyword, postback and comment triggers, replies on WhatsApp, Instagram or Messenger, with reply-loop protection
@@ -78,6 +116,11 @@ GET|POST /webhooks[/whatsapp|/instagram|/messenger|/ads]
 POST     /webhooks/deauthorize
 POST     /webhooks/data-deletion
 
+POST     /api/connect/exchange         one code -> every asset connected and subscribed
+POST     /api/connect/rewire           re-subscribe everything already connected
+GET      /api/connect/report           the last onboarding report
+GET      /api/connect/config           the configuration recipe + product matrix
+
 GET      /auth/facebook/login          start Facebook Login
 GET      /auth/facebook/callback       OAuth redirect target
 POST     /auth/manual-token            paste a Graph API Explorer token
@@ -130,7 +173,7 @@ node src/server.js &   # with META_APP_SECRET=testsecret123 VERIFY_TOKEN=testver
 node smoke.mjs
 ```
 
-42 assertions covering the handshake, signature enforcement, normalization of all four payload types, the automation engine, loop protection and the auth gate.
+60 assertions covering the handshake, signature enforcement, normalization of all four payload types, the automation engine, loop protection, the auth gate and the connect-everything onboarding flow.
 
 ## Notes
 

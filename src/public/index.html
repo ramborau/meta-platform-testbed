@@ -37,7 +37,19 @@
 
   <!-- ============================================================ SETUP -->
   <section class="tab active" id="tab-setup">
-    <div class="card">
+    <div class="card" style="border-color:var(--green);background:linear-gradient(180deg,rgba(46,204,143,.07),transparent)">
+      <h2>Connect everything at once</h2>
+      <p class="hint">
+        One Embedded Signup v4 dialog grants WhatsApp, Instagram, Facebook Pages and ad accounts together,
+        then this server subscribes your app to every one of them so webhooks start flowing immediately.
+      </p>
+      <div class="row" style="margin-top:12px">
+        <a href="/connect"><button class="btn" style="background:var(--green)">Open the connect flow →</button></a>
+        <button class="btn ghost" id="btn-rewire-all">Re-subscribe connected assets</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
       <h2>Paste these into the Meta App Dashboard</h2>
       <p class="hint">Every URL below is live right now. The Verify Token is what Meta echoes back during the webhook handshake — it must match exactly.</p>
       <div id="url-list"></div>
@@ -45,10 +57,10 @@
 
     <div class="grid two" style="margin-top:16px">
       <div class="card">
-        <h2>Connect your account</h2>
-        <p class="hint">Runs Facebook Login and pulls your Pages, Instagram accounts, ad accounts and WABAs in one shot.</p>
+        <h2>Connect your own account</h2>
+        <p class="hint">Plain Facebook Login for testing with your own assets. To onboard a business properly, use the connect flow above instead.</p>
         <div class="row">
-          <a href="/auth/facebook/login"><button class="btn">Login with Facebook</button></a>
+          <a href="/auth/facebook/login"><button class="btn ghost">Login with Facebook</button></a>
           <button class="btn ghost" id="btn-refresh-conn">Refresh</button>
         </div>
         <h3>Or paste a token</h3>

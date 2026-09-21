@@ -137,5 +137,49 @@ r = await post('/api/whatsapp/send', { to: '919999000011', text: 'x' });
 j = await r.json();
 ok('send without credentials fails cleanly', r.status >= 400 && Boolean(j.error), `${r.status} ${JSON.stringify(j).slice(0, 140)}`);
 
+console.log('\n-- connect-everything flow --');
+r = await fetch(B + '/connect');
+ok('connect page serves', r.status === 200, `got ${r.status}`);
+j = await (await fetch(B + '/api/connect/config')).json();
+ok('connect config lists all 5 products', j.products?.length === 5, `got ${j.products?.length}`);
+const productKeys = (j.products || []).map((p) => p.key);
+ok('includes Cloud API', productKeys.includes('cloud_api'));
+ok('includes Click to WhatsApp', productKeys.includes('ctwa'));
+ok('includes Click to Messenger', productKeys.includes('ctm'));
+ok('includes Click to Instagram', productKeys.includes('ctd'));
+ok('CTD pulls in Instagram accounts', j.products.find((p) => p.key === 'ctd')?.assets.includes('Instagram accounts'));
+ok('page subscribe covers messages + feed + leadgen',
+  j.subscribesTo?.page?.includes('messages') && j.subscribesTo.page.includes('feed') && j.subscribesTo.page.includes('leadgen'),
+  JSON.stringify(j.subscribesTo?.page));
+ok('instagram subscribe covers messages + comments',
+  j.subscribesTo?.instagram?.includes('messages') && j.subscribesTo.instagram.includes('comments'));
+ok('recommends DM permissions the ad products miss',
+  j.recommendedExtraPermissions?.includes('instagram_manage_messages') && j.recommendedExtraPermissions.includes('pages_messaging'));
+ok('allowed domain derived from public URL', Boolean(j.allowedDomain), j.allowedDomain);
+ok('app secret not exposed in connect config', j.hasAppSecret === true && j.appSecret === undefined);
+
+r = await post('/api/connect/exchange', {});
+ok('exchange without a code is rejected', r.status === 400, `got ${r.status}`);
+
+r = await post('/api/connect/exchange', { code: 'INVALID_TEST_CODE' });
+j = await r.json();
+ok('invalid code fails with a Graph error, no crash', r.status >= 400 && Boolean(j.error), `${r.status}`);
+
+r = await fetch(B + '/api/connect/report');
+j = await r.json();
+ok('report endpoint responds', r.status === 200 && 'report' in j);
+
+r = await post('/api/connect/session', { type: 'WA_EMBEDDED_SIGNUP', event: 'CANCEL', data: { current_step: 'PHONE_NUMBER_SETUP' } });
+ok('session log accepted', r.status === 200);
+await wait(400);
+j = await getEvents();
+ok('cancelled signup names the failing step',
+  j.events.some((e) => e.kind === 'connect.session.cancel' && /PHONE_NUMBER_SETUP/.test(e.summary)),
+  JSON.stringify(j.events.find((e) => String(e.kind).startsWith('connect.session'))?.summary));
+
+r = await fetch(B + '/api/connect/rewire', { method: 'POST' });
+j = await r.json();
+ok('rewire with nothing connected is a clean no-op', r.status === 200 && j.summary?.subscribed === 0, JSON.stringify(j.summary));
+
 console.log(`\n  ${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

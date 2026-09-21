@@ -13,6 +13,7 @@ import { router as instagramRouter } from './routes/instagram.js';
 import { router as adsRouter } from './routes/ads.js';
 import { router as automationsRouter } from './routes/automations.js';
 import { router as eventsRouter } from './routes/events.js';
+import { router as connectRouter } from './routes/connect.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -71,6 +72,7 @@ app.use('/api/instagram', instagramRouter);
 app.use('/api/ads', adsRouter);
 app.use('/api/automations', automationsRouter);
 app.use('/api/events', eventsRouter);
+app.use('/api/connect', connectRouter);
 
 // Config the dashboard needs to render itself and to show you the exact values
 // to paste into the Meta App Dashboard. Secrets are reported as booleans only.
@@ -95,6 +97,7 @@ app.get('/api/config', (req, res) => {
       dataDeletion: `${config.publicUrl}/webhooks/data-deletion`,
       privacyPolicy: `${config.publicUrl}/privacy`,
       termsOfService: `${config.publicUrl}/terms`,
+      connectAll: `${config.publicUrl}/connect`,
       embeddedSignup: `${config.publicUrl}/embedded-signup`,
     },
     configured: {
@@ -107,7 +110,13 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-// Embedded Signup page needs the config id and app id injected server-side.
+// The unified "connect everything" flow: one Embedded Signup v4 dialog covering
+// WhatsApp, Instagram, Pages and ad accounts, then automatic subscription wiring.
+app.get('/connect', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'connect.html'));
+});
+
+// WhatsApp-only Embedded Signup, kept for testing that flow in isolation.
 app.get('/embedded-signup', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'embedded-signup.html'));
 });

@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect everything — Meta Testbed</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .hero { text-align: center; padding: 34px 20px 26px; }
+    .hero h1 { font-size: 27px; margin: 0 0 10px; font-weight: 660; }
+    .hero p { color: var(--muted); max-width: 560px; margin: 0 auto; font-size: 14px; }
+
+    .channels { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 26px 0; }
+    .chan {
+      display: flex; flex-direction: column; align-items: center; gap: 7px;
+      background: var(--panel-2); border: 1px solid var(--border); border-radius: 12px;
+      padding: 15px 20px; min-width: 116px; transition: all .25s;
+    }
+    .chan .ico { font-size: 25px; line-height: 1; }
+    .chan .nm { font-size: 12px; color: var(--muted); font-weight: 560; }
+    .chan .st { font-size: 10.5px; color: var(--muted); }
+    .chan.pending { opacity: .45; }
+    .chan.working { border-color: var(--accent); animation: pulse 1.3s ease-in-out infinite; }
+    .chan.done { border-color: var(--green); }
+    .chan.done .st { color: var(--green); }
+    .chan.fail { border-color: var(--red); }
+    .chan.fail .st { color: var(--red); }
+    @keyframes pulse { 0%,100% { opacity:.55 } 50% { opacity:1 } }
+
+    .cta {
+      display: block; margin: 0 auto; background: #1877f2; color: #fff; border: 0;
+      border-radius: 10px; padding: 15px 34px; font-size: 16px; font-weight: 640;
+      cursor: pointer; font-family: inherit; min-width: 290px;
+    }
+    .cta:hover:not(:disabled) { filter: brightness(1.09); }
+    .cta:disabled { opacity: .45; cursor: not-allowed; }
+
+    .progress { max-width: 620px; margin: 22px auto 0; }
+    .pstep { display: flex; gap: 11px; align-items: flex-start; padding: 8px 0; font-size: 13px; }
+    .pstep .ic { flex: 0 0 18px; text-align: center; }
+    .pstep .tx { flex: 1; }
+    .pstep .dt { color: var(--muted); font-size: 11.5px; margin-top: 2px; font-family: var(--mono); }
+    .pstep.bad .tx { color: var(--red); }
+
+    .asset-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 11px; margin-top: 12px; }
+    .asset {
+      background: var(--panel-2); border: 1px solid var(--border);
+      border-radius: 9px; padding: 11px 13px;
+    }
+    .asset .t { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+    .asset .s { color: var(--muted); font-size: 11.5px; margin-top: 4px; font-family: var(--mono); }
+    .asset.wired { border-color: rgba(46,204,143,.4); }
+    .asset.unwired { border-color: rgba(255,92,114,.4); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot live"></span> Connect everything</div>
+  <div class="header-meta"><a href="/" style="color:var(--accent);text-decoration:none">← Console</a></div>
+</header>
+
+<main style="max-width:940px">
+
+  <div class="hero">
+    <h1>Connect WhatsApp, Instagram, Facebook and Ads</h1>
+    <p>One authorization. Embedded Signup v4 collects every asset in a single dialog, then this server subscribes your app to all of them so webhooks start flowing immediately.</p>
+  </div>
+
+  <div class="channels" id="channels">
+    <div class="chan pending" data-k="whatsapp"><span class="ico">💬</span><span class="nm">WhatsApp</span><span class="st">waiting</span></div>
+    <div class="chan pending" data-k="instagram"><span class="ico">📸</span><span class="nm">Instagram</span><span class="st">waiting</span></div>
+    <div class="chan pending" data-k="pages"><span class="ico">👍</span><span class="nm">Facebook</span><span class="st">waiting</span></div>
+    <div class="chan pending" data-k="adAccounts"><span class="ico">📊</span><span class="nm">Ads</span><span class="st">waiting</span></div>
+  </div>
+
+  <div id="preflight" style="max-width:680px;margin:0 auto 18px"></div>
+
+  <button class="cta" id="launch" disabled>Continue with Facebook</button>
+  <p style="text-align:center;color:var(--muted);font-size:11.5px;margin-top:11px">
+    You will pick a business portfolio, then select the WhatsApp, Page, Instagram and ad accounts to grant.
+  </p>
+
+  <div class="progress" id="progress"></div>
+
+  <div class="card" id="report-card" style="margin-top:22px;display:none">
+    <h2>Connection report</h2>
+    <p class="hint" id="report-summary"></p>
+    <div id="report-assets"></div>
+    <div id="report-warnings"></div>
+    <div class="row">
+      <button class="btn ghost" id="btn-rewire">Re-subscribe everything</button>
+      <a href="/"><button class="btn">Open the console →</button></a>
+    </div>
+    <pre class="out" id="report-raw" style="display:none"></pre>
+    <div class="row tight"><button class="btn ghost sm" id="btn-raw">Show raw report</button></div>
+  </div>
+
+  <div class="card" style="margin-top:22px">
+    <h2>Build the login configuration</h2>
+    <p class="hint">
+      App Dashboard → <strong>Facebook Login for Business → Configurations → Create configuration</strong>.
+      Pick <strong>Embedded Signup</strong> as the login variation, then tick every product below — that is what makes one dialog cover all four channels.
+    </p>
+    <div id="product-list"></div>
+
+    <h3>Add these permissions too</h3>
+    <p class="hint">The products auto-select what they need for ads. These extras are what make DM automation and comment replies work.</p>
+    <div id="extra-perms" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+
+    <h3>Client OAuth settings</h3>
+    <p class="hint">Facebook Login for Business → Settings. All four toggles must be <strong>Yes</strong>, and the domain below must be listed under <em>Allowed Domains</em> or the SDK will refuse to return a code.</p>
+    <div id="oauth-settings"></div>
+
+    <h3>Before you start</h3>
+    <ul class="checklist">
+      <li><span class="mark">•</span><div>Your app must be a <strong>Business</strong> type app.</div></li>
+      <li><span class="mark">•</span><div>Subscribe to the <code>account_update</code> webhook field on <code>whatsapp_business_account</code> — Meta fires it the moment a customer completes the flow, and it carries their business info.</div></li>
+      <li><span class="mark">•</span><div>In development you can only onboard people with a role on the app (App Roles → Roles). Serving businesses you do not own needs <strong>Advanced Access</strong> through App Review.</div></li>
+      <li><span class="mark">•</span><div>Embedded Signup <strong>v2 is deprecated on 15 October 2026</strong>. Creating a configuration with products selected puts you on v4 automatically.</div></li>
+    </ul>
+  </div>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let CONFIG = {};
+let sessionInfo = {};
+
+function toast(m) { const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2300); }
+
+function setChannel(key, state, label) {
+  const n = document.querySelector(`.chan[data-k="${key}"]`);
+  if (!n) return;
+  n.className = `chan ${state}`;
+  n.querySelector('.st').textContent = label;
+}
+
+function addStep(text, state = 'ok', detail) {
+  const n = document.createElement('div');
+  n.className = `pstep ${state === 'bad' ? 'bad' : ''}`;
+  const icon = state === 'ok' ? '✅' : state === 'bad' ? '❌' : state === 'warn' ? '⚠️' : '⏳';
+  n.innerHTML = `<div class="ic">${icon}</div><div class="tx">${esc(text)}${detail ? `<div class="dt">${esc(detail)}</div>` : ''}</div>`;
+  $('progress').appendChild(n);
+  n.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  return n;
+}
+
+// The SDK reports each step of the flow. Capture it so a cancelled or failed
+// signup names the step it died on instead of silently closing.
+window.addEventListener('message', (event) => {
+  if (!/facebook\.com$/.test(new URL(event.origin).hostname)) return;
+  let data;
+  try { data = JSON.parse(event.data); } catch { return; }
+  if (data.type !== 'WA_EMBEDDED_SIGNUP') return;
+
+  if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
+    sessionInfo = data.data || {};
+    addStep('Asset selection finished', 'ok', `WABA ${sessionInfo.waba_id || '—'} · phone ${sessionInfo.phone_number_id || '—'}`);
+  } else if (data.event === 'CANCEL') {
+    addStep(`Cancelled at step "${data.data?.current_step}"`, 'warn');
+  } else if (data.event === 'ERROR') {
+    addStep(`Error: ${data.data?.error_message}`, 'bad');
+  }
+  fetch('/api/connect/session', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(data) }).catch(()=>{});
+});
+
+async function fbLoginCallback(response) {
+  const code = response?.authResponse?.code;
+  if (!code) {
+    addStep('No authorization code returned', 'bad', 'The dialog was closed, or the configuration is not set to System-user access token with response_type=code.');
+    ['whatsapp','instagram','pages','adAccounts'].forEach(k => setChannel(k, 'fail', 'not connected'));
+    return;
+  }
+
+  addStep('Authorization code received', 'ok');
+  ['whatsapp','instagram','pages','adAccounts'].forEach(k => setChannel(k, 'working', 'wiring…'));
+  const pending = addStep('Exchanging code and subscribing every asset…', 'pending');
+
+  try {
+    const res = await fetch('/api/connect/exchange', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code, sessionInfo }),
+    });
+    const report = await res.json();
+    pending.remove();
+
+    if (!res.ok) {
+      addStep(report.error || 'Exchange failed', 'bad', report.hint || JSON.stringify(report.graphError || {}));
+      ['whatsapp','instagram','pages','adAccounts'].forEach(k => setChannel(k, 'fail', 'failed'));
+      return;
+    }
+    renderReport(report);
+  } catch (err) {
+    pending.remove();
+    addStep(`Request failed: ${err.message}`, 'bad');
+  }
+}
+
+function renderReport(report) {
+  for (const s of report.steps || []) {
+    addStep(s.name, s.ok ? 'ok' : 'warn', typeof s.detail === 'string' ? s.detail : s.detail ? JSON.stringify(s.detail) : '');
+  }
+
+  const counts = {
+    whatsapp: report.summary?.whatsapp || 0,
+    instagram: report.summary?.instagram || 0,
+    pages: report.summary?.pages || 0,
+    adAccounts: report.summary?.adAccounts || 0,
+  };
+  const labels = { whatsapp:'WABA', instagram:'account', pages:'Page', adAccounts:'ad account' };
+  for (const [k, n] of Object.entries(counts)) {
+    setChannel(k, n > 0 ? 'done' : 'fail', n > 0 ? `${n} ${labels[k]}${n>1?'s':''}` : 'none granted');
+  }
+
+  $('report-card').style.display = 'block';
+  $('report-summary').innerHTML =
+    `<strong>${report.summary?.subscribed || 0}</strong> subscriptions succeeded` +
+    (report.summary?.failed ? `, <span style="color:var(--red)"><strong>${report.summary.failed}</strong> failed</span>` : '') +
+    `. Business portfolio <code>${esc(report.businessId || 'unknown')}</code>, token expires <code>${esc(report.expiresIn)}</code>.`;
+
+  // Per-asset cards showing whether the subscription actually landed.
+  const wiringFor = (id) => (report.wiring || []).find((w) => String(w.id) === String(id));
+  const box = $('report-assets');
+  box.innerHTML = '';
+  const groups = [
+    ['WhatsApp Business accounts', report.assets?.whatsapp || [], (a) => ({ id: a.waba_id, title: a.name || a.waba_id, sub: (a.numbers||[]).map(n=>n.display_phone_number).join(', ') || 'no numbers yet', pill: 'whatsapp' })],
+    ['Facebook Pages', report.assets?.pages || [], (a) => ({ id: a.id, title: a.name, sub: a.category || a.id, pill: 'messenger' })],
+    ['Instagram accounts', report.assets?.instagram || [], (a) => ({ id: a.id, title: '@' + (a.username || a.id), sub: a.pageName ? `via ${a.pageName}` : 'no linked Page', pill: 'instagram' })],
+    ['Ad accounts', report.assets?.adAccounts || [], (a) => ({ id: a.id, title: a.name, sub: `${a.currency || ''} · ${a.id}`, pill: 'ads' })],
+  ];
+
+  for (const [title, items, map] of groups) {
+    if (!items.length) continue;
+    const h = document.createElement('h3'); h.textContent = `${title} (${items.length})`; box.appendChild(h);
+    const grid = document.createElement('div'); grid.className = 'asset-grid';
+    for (const item of items) {
+      const m = map(item);
+      const w = wiringFor(m.id);
+      const state = w ? (w.ok ? 'wired' : 'unwired') : '';
+      const badge = w ? (w.ok ? '<span class="pill ok">subscribed</span>' : `<span class="pill err">${esc(w.error || 'failed')}</span>`) : '<span class="pill">no subscription</span>';
+      const d = document.createElement('div');
+      d.className = `asset ${state}`;
+      d.innerHTML = `<div class="t"><span class="pill ${m.pill}">${esc(m.pill)}</span>${esc(m.title)}</div>
+        <div class="s">${esc(m.sub)}</div><div style="margin-top:7px">${badge}</div>
+        ${w && !w.ok && w.hint ? `<div class="s" style="color:var(--amber);margin-top:5px">${esc(w.hint)}</div>` : ''}`;
+      grid.appendChild(d);
+    }
+    box.appendChild(grid);
+  }
+
+  const warn = $('report-warnings');
+  warn.innerHTML = (report.warnings || []).length
+    ? `<h3>Warnings</h3>` + report.warnings.map((w) => `<div class="rule" style="border-color:var(--amber)"><div class="rule-body">${esc(w)}</div></div>`).join('')
+    : '';
+
+  $('report-raw').textContent = JSON.stringify(report, null, 2);
+  addStep(`Done — ${report.summary?.subscribed || 0} assets subscribed`, report.ok ? 'ok' : 'warn');
+}
+
+function launch() {
+  $('progress').innerHTML = '';
+  $('report-card').style.display = 'none';
+  addStep('Opening the Meta login dialog…', 'pending');
+  FB.login(fbLoginCallback, {
+    config_id: CONFIG.configId,
+    response_type: 'code',
+    override_default_response_type: true,
+    extras: {
+      setup: {},
+      featureType: '',
+      sessionInfoVersion: '3',
+    },
+  });
+}
+
+(async function init() {
+  CONFIG = await fetch('/api/connect/config').then((r) => r.json());
+
+  // Product checklist for building the configuration.
+  $('product-list').innerHTML = CONFIG.products.map((p) => `
+    <div class="rule">
+      <div class="rule-head"><span class="rule-name">${esc(p.label)}</span>
+        ${p.assets.map((a) => `<span class="pill">${esc(a)}</span>`).join('')}</div>
+      <div class="rule-body">Permissions: <code>${esc(p.perms.join(', '))}</code></div>
+    </div>`).join('');
+
+  $('extra-perms').innerHTML = CONFIG.recommendedExtraPermissions
+    .map((p) => `<span class="pill">${esc(p)}</span>`).join('');
+
+  $('oauth-settings').innerHTML = `
+    <div class="url-row"><div class="label">Allowed Domain</div><div class="value">${esc(CONFIG.allowedDomain)}</div></div>
+    <div class="url-row"><div class="label">Valid OAuth Redirect URI</div><div class="value">${esc(CONFIG.redirectUri)}</div></div>
+    <div class="url-row"><div class="label">Toggles</div><div class="value">Client OAuth login · Web OAuth login · Enforce HTTPS · Strict Mode → all Yes</div></div>`;
+
+  const problems = [];
+  if (!CONFIG.appId) problems.push('<code>META_APP_ID</code> is not set on the server.');
+  if (!CONFIG.hasAppSecret) problems.push('<code>META_APP_SECRET</code> is not set on the server.');
+  if (!CONFIG.configId) problems.push('<code>WA_EMBEDDED_CONFIG_ID</code> is not set. Build the configuration using the recipe below, then add its ID to the environment.');
+
+  if (problems.length) {
+    $('preflight').innerHTML = `<div class="rule" style="border-color:var(--amber)">
+      <div class="rule-head"><span class="pill warn">not ready yet</span></div>
+      <div class="rule-body"><ul style="margin:6px 0 0;padding-left:18px;line-height:1.9">${problems.map((p)=>`<li>${p}</li>`).join('')}</ul></div></div>`;
+    return;
+  }
+
+  $('preflight').innerHTML = `<div class="rule" style="border-color:var(--green)">
+    <div class="rule-head"><span class="pill ok">ready</span>
+    <span class="pill">App ${esc(CONFIG.appId)}</span>
+    <span class="pill whatsapp">Config ${esc(CONFIG.configId)}</span></div></div>`;
+
+  window.fbAsyncInit = function () {
+    FB.init({ appId: CONFIG.appId, cookie: true, xfbml: true, version: CONFIG.graphVersion });
+    $('launch').disabled = false;
+  };
+  const s = document.createElement('script');
+  s.src = 'https://connect.facebook.net/en_US/sdk.js';
+  s.async = true; s.defer = true; s.crossOrigin = 'anonymous';
+  document.head.appendChild(s);
+
+  // If an onboarding already happened this process, show it.
+  const { report } = await fetch('/api/connect/report').then((r) => r.json());
+  if (report) renderReport(report);
+})();
+
+$('launch').addEventListener('click', launch);
+$('btn-raw').addEventListener('click', () => {
+  const r = $('report-raw');
+  r.style.display = r.style.display === 'none' ? 'block' : 'none';
+});
+$('btn-rewire').addEventListener('click', async (e) => {
+  e.target.disabled = true;
+  try {
+    const rep = await fetch('/api/connect/rewire', { method: 'POST' }).then((r) => r.json());
+    toast(`${rep.summary?.subscribed || 0} re-subscribed, ${rep.summary?.failed || 0} failed`);
+    addStep(`Re-subscribed ${rep.summary?.subscribed || 0} assets`, rep.ok ? 'ok' : 'warn');
+  } finally { e.target.disabled = false; }
+});
+</script>
+</body>
+</html>

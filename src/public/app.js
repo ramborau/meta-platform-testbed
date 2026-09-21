@@ -83,6 +83,7 @@ async function loadConfig() {
     : '<span class="pill warn">signature check OFF</span>';
 
   const rows = [
+    ['Connect-everything page', CONFIG.urls.connectAll],
     ['Webhook — WhatsApp', CONFIG.urls.webhookWhatsApp],
     ['Webhook — Instagram', CONFIG.urls.webhookInstagram],
     ['Webhook — Messenger / Page', CONFIG.urls.webhookMessenger],
@@ -160,6 +161,11 @@ async function loadConnections() {
 }
 
 wire('btn-refresh-conn', null, async () => { await loadConnections(); toast('Refreshed'); });
+wire('btn-rewire-all', 'conn-out', async () => {
+  const report = await api('/api/connect/rewire', { method: 'POST' });
+  toast(`${report.summary?.subscribed || 0} re-subscribed, ${report.summary?.failed || 0} failed`);
+  return report;
+});
 wire('btn-manual-token', 'conn-out', async () => {
   const r = await api('/auth/manual-token', { method: 'POST', body: { token: $('manual-token').value.trim() } });
   await loadConnections();
