@@ -214,7 +214,10 @@ router.post('/showcase', async (req, res, next) => {
         label: 'Single image',
         spec: {
           page_id: pageId,
-          ...(igId ? { instagram_actor_id: igId } : {}),
+          // instagram_actor_id was removed in v23 and now errors with
+          // "must be a valid Instagram account id" even for a correct id.
+          // instagram_user_id is the replacement.
+          ...(igId ? { instagram_user_id: igId } : {}),
           link_data: {
             link,
             message: 'Single image ad — one picture, one link, one call to action.',
@@ -230,7 +233,10 @@ router.post('/showcase', async (req, res, next) => {
         label: 'Carousel',
         spec: {
           page_id: pageId,
-          ...(igId ? { instagram_actor_id: igId } : {}),
+          // instagram_actor_id was removed in v23 and now errors with
+          // "must be a valid Instagram account id" even for a correct id.
+          // instagram_user_id is the replacement.
+          ...(igId ? { instagram_user_id: igId } : {}),
           link_data: {
             link,
             message: 'Carousel ad — several swipeable cards in a single unit.',
@@ -251,7 +257,10 @@ router.post('/showcase', async (req, res, next) => {
         label: 'Link ad with Sign Up CTA',
         spec: {
           page_id: pageId,
-          ...(igId ? { instagram_actor_id: igId } : {}),
+          // instagram_actor_id was removed in v23 and now errors with
+          // "must be a valid Instagram account id" even for a correct id.
+          // instagram_user_id is the replacement.
+          ...(igId ? { instagram_user_id: igId } : {}),
           link_data: {
             link,
             message: 'Link ad — same shape as a single image but a different call to action.',
@@ -307,7 +316,10 @@ router.post('/showcase', async (req, res, next) => {
             name: '[Testbed] Video',
             object_story_spec: {
               page_id: pageId,
-              ...(igId ? { instagram_actor_id: igId } : {}),
+              // instagram_actor_id was removed in v23 and now errors with
+          // "must be a valid Instagram account id" even for a correct id.
+          // instagram_user_id is the replacement.
+          ...(igId ? { instagram_user_id: igId } : {}),
               video_data: {
                 video_id: video.id,
                 message: 'Video ad — motion creative.',
