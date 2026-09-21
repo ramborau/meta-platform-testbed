@@ -1,7 +1,7 @@
 import express from 'express';
 import { config } from '../config.js';
 import { graph } from '../lib/graph.js';
-import { resolveToken, rawConnections } from '../lib/store.js';
+import { resolveToken, rawConnections, addEvent } from '../lib/store.js';
 
 export const router = express.Router();
 
@@ -134,6 +134,214 @@ router.get('/leadgen/:leadId', async (req, res, next) => {
       query: { fields: 'id,created_time,ad_id,form_id,campaign_name,field_data' },
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/ads/showcase
+// Builds ONE campaign containing every ad format, so you can see each creative
+// shape round-trip through the Marketing API.
+//
+// Everything is created PAUSED at all three levels - campaign, ad set and ad.
+// A paused parent is enough to stop delivery on its own, but pausing all three
+// means no single accidental toggle in Ads Manager can start spending.
+router.post('/showcase', async (req, res, next) => {
+  try {
+    const accountId = String(req.body?.accountId || acct()?.replace(/^act_/, '') || '').replace(/^act_/, '');
+    if (!accountId) return res.status(400).json({ error: 'No ad account available' });
+
+    const conns = rawConnections();
+    const pageId = req.body?.pageId || config.page.id || conns.pages[0]?.id;
+    if (!pageId) return res.status(400).json({ error: 'No Page available - a Page is required for ad creatives' });
+    const igId = conns.instagram[0]?.id;
+
+    const token = resolveToken('ads');
+    const act = `act_${accountId}`;
+    const base = config.publicUrl;
+    const link = req.body?.link || `${base}/`;
+    const countries = req.body?.countries || ['IN'];
+    const dailyBudget = String(req.body?.dailyBudget || 20000); // minor units
+    const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+    const report = { accountId, pageId, igId, created: {}, ads: [], warnings: [] };
+
+    // ---------------------------------------------------------- campaign ----
+    const campaign = await graph.post(`${act}/campaigns`, {
+      token,
+      body: {
+        name: req.body?.name || `[Testbed] All ad formats — ${stamp}`,
+        objective: 'OUTCOME_TRAFFIC',
+        status: 'PAUSED',
+        special_ad_categories: [],
+      },
+    });
+    report.created.campaign = campaign.id;
+
+    // ------------------------------------------------------------ ad set ----
+    const adset = await graph.post(`${act}/adsets`, {
+      token,
+      body: {
+        name: `[Testbed] Ad set — link clicks`,
+        campaign_id: campaign.id,
+        status: 'PAUSED',
+        daily_budget: dailyBudget,
+        billing_event: 'IMPRESSIONS',
+        optimization_goal: 'LINK_CLICKS',
+        bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+        targeting: {
+          geo_locations: { countries },
+          age_min: 18,
+          age_max: 65,
+        },
+        // Start in the future so nothing can deliver even if it were unpaused.
+        start_time: new Date(Date.now() + 7 * 864e5).toISOString(),
+      },
+    });
+    report.created.adset = adset.id;
+
+    // Images are served from this service, so Meta fetches a real public URL.
+    const img = (n) => `${base}/assets/ad-${n}.png`;
+
+    // Each entry is one ad format. Built as a list so a failure in one shape
+    // reports itself and the rest still get created.
+    const formats = [
+      {
+        key: 'single_image',
+        label: 'Single image',
+        spec: {
+          page_id: pageId,
+          ...(igId ? { instagram_actor_id: igId } : {}),
+          link_data: {
+            link,
+            message: 'Single image ad — one picture, one link, one call to action.',
+            name: 'Single image format',
+            description: 'Created by the Meta testbed',
+            picture: img(1),
+            call_to_action: { type: 'LEARN_MORE', value: { link } },
+          },
+        },
+      },
+      {
+        key: 'carousel',
+        label: 'Carousel',
+        spec: {
+          page_id: pageId,
+          ...(igId ? { instagram_actor_id: igId } : {}),
+          link_data: {
+            link,
+            message: 'Carousel ad — several swipeable cards in a single unit.',
+            multi_share_optimized: true,
+            multi_share_end_card: false,
+            child_attachments: [1, 2, 3].map((n) => ({
+              link,
+              name: `Card ${n}`,
+              description: `Carousel card number ${n}`,
+              picture: img(n),
+              call_to_action: { type: 'LEARN_MORE', value: { link } },
+            })),
+          },
+        },
+      },
+      {
+        key: 'link_cta',
+        label: 'Link ad with Sign Up CTA',
+        spec: {
+          page_id: pageId,
+          ...(igId ? { instagram_actor_id: igId } : {}),
+          link_data: {
+            link,
+            message: 'Link ad — same shape as a single image but a different call to action.',
+            name: 'Sign up today',
+            description: 'Testing call_to_action variants',
+            picture: img(4),
+            call_to_action: { type: 'SIGN_UP', value: { link } },
+          },
+        },
+      },
+    ];
+
+    for (const format of formats) {
+      try {
+        const creative = await graph.post(`${act}/adcreatives`, {
+          token,
+          body: { name: `[Testbed] ${format.label}`, object_story_spec: format.spec },
+        });
+        const ad = await graph.post(`${act}/ads`, {
+          token,
+          body: {
+            name: `[Testbed] ${format.label}`,
+            adset_id: adset.id,
+            creative: { creative_id: creative.id },
+            status: 'PAUSED',
+          },
+        });
+        report.ads.push({ format: format.key, label: format.label, ok: true, creativeId: creative.id, adId: ad.id });
+      } catch (err) {
+        report.ads.push({
+          format: format.key,
+          label: format.label,
+          ok: false,
+          error: err.error?.message || err.message,
+          code: err.error?.code,
+          subcode: err.error?.error_subcode,
+        });
+      }
+    }
+
+    // ------------------------------------------------------------- video ----
+    // Video needs a real encoded asset, which this service cannot synthesise.
+    // Attempted only when a URL is supplied, and reported rather than faked.
+    if (req.body?.videoUrl) {
+      try {
+        const video = await graph.post(`${act}/advideos`, {
+          token,
+          body: { file_url: req.body.videoUrl, name: '[Testbed] video' },
+        });
+        const creative = await graph.post(`${act}/adcreatives`, {
+          token,
+          body: {
+            name: '[Testbed] Video',
+            object_story_spec: {
+              page_id: pageId,
+              ...(igId ? { instagram_actor_id: igId } : {}),
+              video_data: {
+                video_id: video.id,
+                message: 'Video ad — motion creative.',
+                title: 'Video format',
+                link_description: 'Created by the Meta testbed',
+                image_url: img(5),
+                call_to_action: { type: 'LEARN_MORE', value: { link } },
+              },
+            },
+          },
+        });
+        const ad = await graph.post(`${act}/ads`, {
+          token,
+          body: { name: '[Testbed] Video', adset_id: adset.id, creative: { creative_id: creative.id }, status: 'PAUSED' },
+        });
+        report.ads.push({ format: 'video', label: 'Video', ok: true, videoId: video.id, creativeId: creative.id, adId: ad.id });
+      } catch (err) {
+        report.ads.push({ format: 'video', label: 'Video', ok: false, error: err.error?.message || err.message, code: err.error?.code });
+      }
+    } else {
+      report.warnings.push('Video ad skipped - pass videoUrl (a public MP4) to include it.');
+    }
+
+    report.summary = {
+      created: report.ads.filter((a) => a.ok).length,
+      failed: report.ads.filter((a) => !a.ok).length,
+      status: 'ALL PAUSED - nothing can deliver or spend',
+    };
+
+    addEvent({
+      channel: 'ads',
+      kind: 'showcase.created',
+      summary: `Created campaign ${campaign.id} with ${report.summary.created} ad format(s), all PAUSED`,
+      payload: report.summary,
+    });
+
+    res.json(report);
   } catch (err) {
     next(err);
   }

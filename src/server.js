@@ -5,6 +5,7 @@ import express from 'express';
 import { config } from './config.js';
 import { seedRules, addEvent, eventStats, restoreConnections, restoreRules } from './lib/store.js';
 import { initPersistence, persistenceStatus } from './lib/persist.js';
+import { makePng } from './lib/testimage.js';
 import { GraphError } from './lib/graph.js';
 
 import { router as webhooksRouter } from './routes/webhooks.js';
@@ -190,6 +191,13 @@ app.get('/data-deletion-status', (req, res) =>
      <p>Status: completed. This testbed keeps no durable user data - events live in memory only.</p></body>`
   )
 );
+
+// Generated ad creatives. Meta fetches ad images over HTTP, so serving them
+// from this domain avoids a binary upload and a third-party placeholder host.
+app.get('/assets/ad-:n.png', (req, res) => {
+  const n = Number(req.params.n) || 1;
+  res.type('image/png').set('Cache-Control', 'public, max-age=86400').send(makePng({ seed: n - 1 }));
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
