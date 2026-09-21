@@ -99,6 +99,45 @@ router.post('/send', async (req, res, next) => {
   }
 });
 
+// POST /api/messenger/action - typing indicator and read receipts.
+// These are sender_action calls, not messages, and carry no message body.
+// typing_on clears itself after ~20 seconds or when the next message is sent.
+router.post('/action', async (req, res, next) => {
+  try {
+    const { to, action = 'typing_on' } = req.body || {};
+    if (!to) return res.status(400).json({ error: 'to (PSID) is required' });
+    if (!['typing_on', 'typing_off', 'mark_seen'].includes(action)) {
+      return res.status(400).json({ error: 'action must be typing_on, typing_off or mark_seen' });
+    }
+    const result = await graph.post(`${pageId(req.body?.pageId)}/messages`, {
+      token: resolveToken('messenger'),
+      body: { recipient: { id: to }, sender_action: action },
+    });
+    res.json({ ok: true, action, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/messenger/react - react to a message the user sent
+router.post('/react', async (req, res, next) => {
+  try {
+    const { to, messageId, reaction = 'love', remove = false } = req.body || {};
+    if (!to || !messageId) return res.status(400).json({ error: 'to and messageId are required' });
+    const result = await graph.post(`${pageId(req.body?.pageId)}/messages`, {
+      token: resolveToken('messenger'),
+      body: {
+        recipient: { id: to },
+        sender_action: remove ? 'unreact' : 'react',
+        payload: { message_id: messageId, ...(remove ? {} : { reaction }) },
+      },
+    });
+    res.json({ ok: true, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/messenger/subscribe - subscribe the app to a Page's webhooks.
 // Page webhooks need BOTH an app-level subscription (App Dashboard) and this
 // per-page call, which is the step people most often forget.

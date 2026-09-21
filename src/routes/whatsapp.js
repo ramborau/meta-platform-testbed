@@ -156,12 +156,48 @@ router.post('/send', async (req, res, next) => {
       case 'video':
       case 'document':
       case 'audio':
+      case 'sticker':
         if (!mediaUrl) return res.status(400).json({ error: 'mediaUrl is required for media messages' });
         payload = {
           messaging_product: 'whatsapp',
           to,
           type,
-          [type]: { link: mediaUrl, ...(caption && type !== 'audio' ? { caption } : {}) },
+          [type]: {
+            link: mediaUrl,
+            // Audio and stickers reject a caption; documents take a filename.
+            ...(caption && !['audio', 'sticker'].includes(type) ? { caption } : {}),
+            ...(type === 'document' && req.body?.filename ? { filename: req.body.filename } : {}),
+          },
+        };
+        break;
+
+      case 'contacts':
+        payload = {
+          messaging_product: 'whatsapp',
+          to,
+          type: 'contacts',
+          contacts: req.body?.contacts || [
+            {
+              name: { formatted_name: 'Meta Testbed', first_name: 'Meta', last_name: 'Testbed' },
+              phones: [{ phone: '+919422594226', type: 'WORK', wa_id: '919422594226' }],
+              emails: [{ email: 'test@example.com', type: 'WORK' }],
+              org: { company: 'Testbed', title: 'Automation' },
+            },
+          ],
+        };
+        break;
+
+      // Renders a "Send location" button rather than plain text asking for it.
+      case 'location_request':
+        payload = {
+          messaging_product: 'whatsapp',
+          to,
+          type: 'interactive',
+          interactive: {
+            type: 'location_request_message',
+            body: { text: text || 'Please share your location so we can find the nearest branch.' },
+            action: { name: 'send_location' },
+          },
         };
         break;
 
@@ -178,6 +214,28 @@ router.post('/send', async (req, res, next) => {
 
     const result = await graph.post(`${id}/messages`, { token: resolveToken('whatsapp'), body: payload });
     res.json({ ok: true, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/whatsapp/typing
+// A typing indicator is attached to a read receipt rather than sent on its own,
+// and it clears by itself after ~25 seconds or when the next message arrives.
+router.post('/typing', async (req, res, next) => {
+  try {
+    const { messageId, phoneNumberId } = req.body || {};
+    if (!messageId) return res.status(400).json({ error: 'messageId of the inbound message is required' });
+    const result = await graph.post(`${pnId(phoneNumberId)}/messages`, {
+      token: resolveToken('whatsapp'),
+      body: {
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: messageId,
+        typing_indicator: { type: 'text' },
+      },
+    });
+    res.json({ ok: true, note: 'Typing shown until a message is sent, max ~25s', result });
   } catch (err) {
     next(err);
   }

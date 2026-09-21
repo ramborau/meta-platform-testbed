@@ -67,7 +67,35 @@ router.post('/send', async (req, res, next) => {
     if (!to) return res.status(400).json({ error: 'to (IGSID) is required' });
 
     let message;
-    if (mediaUrl) {
+    if (Array.isArray(req.body?.card) || req.body?.card) {
+      // Instagram supports the generic template too; more than one element
+      // renders as a swipeable carousel, same as Messenger.
+      const cards = Array.isArray(req.body.card) ? req.body.card : [req.body.card];
+      message = {
+        attachment: {
+          type: 'template',
+          payload: {
+            template_type: 'generic',
+            elements: cards.slice(0, 10).map((c) => ({
+              title: c.title || 'Card',
+              subtitle: c.subtitle,
+              image_url: c.imageUrl,
+              ...(c.url ? { default_action: { type: 'web_url', url: c.url } } : {}),
+              buttons: (c.buttons || []).map((b) => ({
+                type: b.url ? 'web_url' : 'postback',
+                title: b.title,
+                ...(b.url ? { url: b.url } : { payload: b.payload || b.title }),
+              })),
+            })),
+          },
+        },
+      };
+    } else if (req.body?.mediaShareId) {
+      // Share one of the account's own posts into the thread.
+      message = { attachment: { type: 'MEDIA_SHARE', payload: { id: req.body.mediaShareId } } };
+    } else if (req.body?.heart) {
+      message = { attachment: { type: 'like_heart' } };
+    } else if (mediaUrl) {
       message = { attachment: { type: mediaType, payload: { url: mediaUrl } } };
     } else {
       if (!text) return res.status(400).json({ error: 'text or mediaUrl is required' });
@@ -88,6 +116,43 @@ router.post('/send', async (req, res, next) => {
     const result = await graph.post(`${igMessagingNode(req.body?.pageId)}/messages`, {
       token: igMessagingToken(),
       body: { recipient: { id: to }, message },
+    });
+    res.json({ ok: true, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/instagram/action - typing indicator and read receipts
+router.post('/action', async (req, res, next) => {
+  try {
+    const { to, action = 'typing_on' } = req.body || {};
+    if (!to) return res.status(400).json({ error: 'to (IGSID) is required' });
+    if (!['typing_on', 'typing_off', 'mark_seen'].includes(action)) {
+      return res.status(400).json({ error: 'action must be typing_on, typing_off or mark_seen' });
+    }
+    const result = await graph.post(`${igMessagingNode(req.body?.pageId)}/messages`, {
+      token: igMessagingToken(),
+      body: { recipient: { id: to }, sender_action: action },
+    });
+    res.json({ ok: true, action, result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/instagram/react - react to a message in the thread
+router.post('/react', async (req, res, next) => {
+  try {
+    const { to, messageId, reaction = 'love', remove = false } = req.body || {};
+    if (!to || !messageId) return res.status(400).json({ error: 'to and messageId are required' });
+    const result = await graph.post(`${igMessagingNode(req.body?.pageId)}/messages`, {
+      token: igMessagingToken(),
+      body: {
+        recipient: { id: to },
+        sender_action: remove ? 'unreact' : 'react',
+        payload: { message_id: messageId, ...(remove ? {} : { reaction }) },
+      },
     });
     res.json({ ok: true, result });
   } catch (err) {
